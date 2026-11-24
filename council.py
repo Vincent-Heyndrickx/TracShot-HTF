@@ -35,6 +35,8 @@ ROLLEN = ("archmage", "engineer", "guardian_keeper", "historian", "oracle", "bea
 PREFIX = {"archmage": "ARC", "engineer": "ENG", "guardian_keeper": "GUA", "historian": "HIS", "oracle": "ORA", "beast_master": "BEA"}
 BEURTENBUDGET = 10  # spelregel: maximaal 10 Raadslid-beurten (berichten van Raadsleden) per run
 MIN_BEURTEN_VOOR_STOP = 4  # de Koning mag niet stoppen voor er een minimum aan kennis op tafel ligt
+MAX_MISLUKT_PER_ROL = 2  # na zoveel mislukte beurten krijgt een Rol het woord niet meer in deze run
+MAX_MISLUKT_TOTAAL = 4  # na zoveel mislukte beurten in totaal stopt het debat en schrijft de Koning het Verdict
 SLOTS = ("ingreep", "mechanisme", "verloop")
 
 # Herkent ook ID's met een rare streep (U+2011 enz.); we normaliseren ze naar een gewoon '-'.
@@ -208,7 +210,10 @@ def debat_tekst(beurten, leden, met_toolcalls=True):
     namen = {l.ROL: l.NAAM for l in leden}
     regels = []
     for b in beurten:
-        if b["soort"] == "routering" and b.get("aan"):
+        if b.get("mislukt"):
+            rol = b["mislukt"]["rol"]
+            regels.append(f"[Orchestrator] De beurt van {namen.get(rol, rol)} is mislukt: er kwam geen bijdrage en geen bewijs.")
+        elif b["soort"] == "routering" and b.get("aan"):
             regels.append(f"[Koning → {namen.get(b['aan'], b['aan'])}] {b.get('vraag')}")
         elif b["soort"] == "toolcall" and met_toolcalls:
             regels.append(f"  ({namen.get(b['spreker'], b['spreker'])} raadpleegde zijn Kennisbron: {b['tool']})")
@@ -217,12 +222,24 @@ def debat_tekst(beurten, leden, met_toolcalls=True):
     return "\n\n".join(regels) or "(het debat is nog niet begonnen)"
 
 
+def mislukt_per_rol(beurten):
+    """Aantal mislukte beurten per Rol. Een mislukte beurt staat in de trace als melding van de orchestrator (veld `mislukt`)."""
+    tel = {}
+    for b in beurten:
+        if b.get("mislukt"):
+            tel[b["mislukt"]["rol"]] = tel.get(b["mislukt"]["rol"], 0) + 1
+    return tel
+
+
 def ledenlijst(beurten, leden):
-    regels = []
+    regels, mis = [], mislukt_per_rol(beurten)
     for l in leden:
         n = sum(1 for b in beurten if b["soort"] == "bericht" and b["spreker"] == l.ROL)
+        m = mis.get(l.ROL, 0)
+        uitval = "" if not m else (f" {m} beurt(en) mislukt: niet meer beschikbaar in dit debat." if m >= MAX_MISLUKT_PER_ROL
+                                   else f" {m} beurt mislukt: je mag deze Rol nog één keer proberen.")
         regels.append(f"- {l.ROL} ({l.NAAM}, ID-prefix {PREFIX[l.ROL]}-): {l.PERSPECTIEF} "
-                      f"Publiek Belang: {getattr(l, 'BELANG', 'onbekend')}. Sprak al {n}x.")
+                      f"Publiek Belang: {getattr(l, 'BELANG', 'onbekend')}. Sprak al {n}x.{uitval}")
     return "\n".join(regels)
 
 
@@ -278,16 +295,20 @@ def kies_volgende(beurten, leden):
         STAAT["open_vragen"] = open_vragen
         return None, None, reden or "De Koning acht het debat afgerond.", open_vragen
 
-    if rol not in rollen or not vraag:
+    uit = {r for r, n in mislukt_per_rol(beurten).items() if n >= MAX_MISLUKT_PER_ROL}  # Rollen die niet meer beschikbaar zijn
+    if rol not in rollen or rol in uit or not vraag:
         # Vangnet als de Koning-agent faalt of iets ongeldigs kiest: wie nog niet sprak, anders stoppen.
-        stil = [l for l in leden if not any(b["soort"] == "bericht" and b["spreker"] == l.ROL for b in beurten)]
+        stil = [l for l in leden if l.ROL not in uit
+                and not any(b["soort"] == "bericht" and b["spreker"] == l.ROL for b in beurten)]
         if not stil:
-            return None, None, "Vangnet: Koning-agent gaf geen geldige keuze en alle Raadsleden spraken al.", STAAT["open_vragen"]
+            return None, None, ("Vangnet: Koning-agent gaf geen geldige keuze en alle beschikbare Raadsleden spraken al."
+                                + (f" Niet meer beschikbaar na mislukte beurten: {', '.join(sorted(uit))}." if uit else "")), STAAT["open_vragen"]
+        koos_uitgevallen = rol in uit
         lid = stil[0]
         rol = lid.ROL
         vraag = ("Wat zegt jouw Kennisbron over de oorzaak van de Desync: wie deed wat en wanneer, en hoe leidde dat tot "
                  "de symptomen? Noem record-ID's en dagen.")
-        reden = (f"Vangnet ({'Koning wilde te vroeg stoppen' if keuze else 'Koning-agent gaf geen geldige keuze'}): "
+        reden = (f"Vangnet ({'Koning koos een Rol die na mislukte beurten niet meer beschikbaar is' if koos_uitgevallen else 'Koning wilde te vroeg stoppen' if keuze else 'Koning-agent gaf geen geldige keuze'}): "
                  f"{lid.NAAM} sprak nog niet en kan ontbrekende kennis hebben.")
         open_vragen = open_vragen or STAAT["open_vragen"]
     STAAT["open_vragen"] = open_vragen
@@ -700,8 +721,12 @@ async def run():
             gesproken = sum(1 for b in beurten if b["soort"] == "bericht" and b["spreker"] in per_rol)
             trace["aan_het_woord"] = "koning"
             bewaar("trace.json", trace)
+            mislukt_totaal = sum(mislukt_per_rol(beurten).values())
             if gesproken >= BEURTENBUDGET:
                 rol, vraag, reden, open_vragen = None, None, f"Beurtenbudget op ({BEURTENBUDGET} Raadslid-beurten)", STAAT["open_vragen"]
+            elif mislukt_totaal >= MAX_MISLUKT_TOTAAL:
+                rol, vraag, reden, open_vragen = None, None, (f"Gestopt na {mislukt_totaal} mislukte beurten: de Koning schrijft "
+                                                              "het Verdict met wat er op tafel ligt."), STAAT["open_vragen"]
             else:
                 rol, vraag, reden, open_vragen = await asyncio.to_thread(kies_volgende, beurten, leden)
             if rol is not None and rol not in per_rol:
@@ -719,30 +744,40 @@ async def run():
             trace["aan_het_woord"] = rol
             bewaar("trace.json", trace)
             live(forceer=True, spreker=rol, soort="bericht", stap="denkt")
-            if rol in sessies:  # toolmodus python
-                sessie, mcp_tools = sessies[rol]
-                tekst, calls, gezien = await spreek_python(
-                    llm, instructies(lid, [], mcp_url), prompt, sessie, mcp_tools, rol=rol,
-                    bij_tool=lambda tool, args: beurt(ronde, rol, "toolcall", tool=tool, argumenten=args, pad=mcp_url))
-                STAAT["gezien"].setdefault(rol, set()).update(gezien)
-                beurt(ronde, rol, "bericht", tekst=tekst)
-                print(f"\n[ronde {ronde}] {lid.NAAM}:\n{tekst}")
-                continue
-            r = await agent.run(prompt, options=opties)
-            tel(verbruik, "klein", r.usage_details)
-            calls = list(toolcalls(r))
-            if mcp_url and not calls:
-                # Spreken zonder je bron te lezen = verzonnen ID's. Eén keer opnieuw, nu verplicht met tools.
-                print(f"[{lid.NAAM}] antwoordde zonder toolcall: opnieuw, met Kennisbron.")
-                r = await agent.run(prompt + "\n\nJe raadpleegde je Kennisbron niet. Gebruik nu EERST je tools "
-                                    "(zoek / zoek_betekenis / toon) en antwoord pas daarna.", options=opties)
+            try:
+                if rol in sessies:  # toolmodus python
+                    sessie, mcp_tools = sessies[rol]
+                    tekst, calls, gezien = await spreek_python(
+                        llm, instructies(lid, [], mcp_url), prompt, sessie, mcp_tools, rol=rol,
+                        bij_tool=lambda tool, args: beurt(ronde, rol, "toolcall", tool=tool, argumenten=args, pad=mcp_url))
+                    STAAT["gezien"].setdefault(rol, set()).update(gezien)
+                    beurt(ronde, rol, "bericht", tekst=tekst)
+                    print(f"\n[ronde {ronde}] {lid.NAAM}:\n{tekst}")
+                    continue
+                r = await agent.run(prompt, options=opties)
                 tel(verbruik, "klein", r.usage_details)
                 calls = list(toolcalls(r))
-            for tool, args in calls:
-                beurt(ronde, rol, "toolcall", tool=tool, argumenten=args, pad=mcp_url)
-            STAAT["gezien"].setdefault(rol, set()).update(gezien_ids(r))
-            beurt(ronde, rol, "bericht", tekst=r.text)
-            print(f"\n[ronde {ronde}] {lid.NAAM}:\n{r.text}")
+                if mcp_url and not calls:
+                    # Spreken zonder je bron te lezen = verzonnen ID's. Eén keer opnieuw, nu verplicht met tools.
+                    print(f"[{lid.NAAM}] antwoordde zonder toolcall: opnieuw, met Kennisbron.")
+                    r = await agent.run(prompt + "\n\nJe raadpleegde je Kennisbron niet. Gebruik nu EERST je tools "
+                                        "(zoek / zoek_betekenis / toon) en antwoord pas daarna.", options=opties)
+                    tel(verbruik, "klein", r.usage_details)
+                    calls = list(toolcalls(r))
+                for tool, args in calls:
+                    beurt(ronde, rol, "toolcall", tool=tool, argumenten=args, pad=mcp_url)
+                STAAT["gezien"].setdefault(rol, set()).update(gezien_ids(r))
+                beurt(ronde, rol, "bericht", tekst=r.text)
+                print(f"\n[ronde {ronde}] {lid.NAAM}:\n{r.text}")
+            except Exception as e:
+                # Eén mislukte beurt mag de run niet stoppen. De melding staat in de trace (geen Raadslid-bericht, dus geen
+                # beurt uit het budget), de Koning ziet ze in het debat en routeert verder; er komt altijd een Verdict.
+                fout = f"{type(e).__name__}: {str(e)[:200]}"
+                poging = mislukt_per_rol(beurten).get(rol, 0) + 1
+                beurt(ronde, "koning", "bericht", mislukt={"rol": rol, "poging": poging, "fout": fout},
+                      tekst=f"Melding van de orchestrator (geen modeltekst): de beurt van {lid.NAAM} is mislukt en telt niet "
+                            f"als bijdrage. {fout}")
+                print(f"\n[ronde {ronde}] {lid.NAAM}: beurt mislukt ({fout})")
 
     # De Koning heeft geen Rol en geen Kennisbron: hij kent alleen wat de Raadsleden inbrachten.
     trace["aan_het_woord"] = "koning"
@@ -763,6 +798,9 @@ async def run():
     bewaar("verdict.json", verdict)
 
     print(f"\nKlaar: verdict.json en trace.json geschreven in {out} (run_id {run_id}).")
+    zwijgers = [l.NAAM for l in leden if not any(b["soort"] == "bericht" and b["spreker"] == l.ROL for b in beurten)]
+    if zwijgers:
+        print(f"LET OP: niet elke Rol sprak in deze run. Zonder bijdrage: {', '.join(zwijgers)}.")
     for model, v in verbruik.items():
         print(f"Verbruik {model}: {v['beurten']} beurten, {v['invoer']} tokens in ({v['gecached']} gecached), {v['uitvoer']} tokens uit")
 
