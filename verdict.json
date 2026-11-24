@@ -1,0 +1,131 @@
+{
+  "run_id": "2026-11-24T14:39:38+00:00_33fc26b6",
+  "samenvatting": "De Archmage gaf op dag 8 toestemming voor een eigen datanetmaat en vroeg de raad niet te informeren en de brief buiten het register te houden; dit is een vastgelegd geheimhoudingsverzoek, geen bewijs dat hij de latere hulpslag kende of schade wilde veroorzaken (ARC-106). Op dag 10 werd om 02:40 een zelfstandige hulpslag geactiveerd door een onbekende uitvoerder; daarna volgden dierenonrust om 04:40, een schildopening om 04:47 en bericht- en kasboekproblemen rond 04:50, zonder bewezen causaal verband (ENG-106, ENG-011, BEA-106, GUA-111, ENG-107). Oracle en Beast Master ondersteunen onafhankelijk een vierdagenpatroon, maar niet een klokmechanisme of de stelling dat alle tussendagen rustig waren (ORA-110, ORA-142, BEA-113, BEA-118, BEA-121). Het advies is verdere tempoverhogingen te stoppen, registers veilig te stellen en pas na onafhankelijke metingen gecontroleerd herstel te beproeven; abrupt uitschakelen is niet als veilig aangetoond (ENG-029, HIS-109, HIS-110, ENG-114).",
+  "oorzaak": {
+    "ingreep": {
+      "bewering": "De Archmage gaf op dag 8 toestemming voor een eigen datanetmaat; een niet-geïdentificeerde uitvoerder activeerde op dag 10 om 02:40 de zelfstandige, snellere hulpslag. Dat de toestemming specifiek deze activering omvatte, is niet vastgesteld.",
+      "bewijs": [
+        "ARC-106",
+        "ENG-011",
+        "ENG-103",
+        "ENG-106"
+      ],
+      "zekerheid": 0.85
+    },
+    "mechanisme": {
+      "bewering": null,
+      "bewijs": [],
+      "zekerheid": 0.0
+    },
+    "verloop": {
+      "bewering": "Op dag 10 volgden dierenonrust, schildopening en dataproblemen na de activering. Oracle en Beast Master beschrijven terugkerende zware of onrustige nachten op dagen 10, 14, 18, 22, 26, 30, 34, 38 en 42. Dit ondersteunt een vierdagenpatroon, niet de identiteit van alle verschijnselen of hun gezamenlijke oorzaak; schildopeningen op dag 23 tonen bovendien dat schildincidenten niet uitsluitend op deze patroondagen vallen.",
+      "bewijs": [
+        "ENG-106",
+        "BEA-106",
+        "GUA-111",
+        "ENG-107",
+        "ORA-110",
+        "ORA-114",
+        "ORA-118",
+        "ORA-122",
+        "ORA-126",
+        "ORA-130",
+        "ORA-134",
+        "ORA-138",
+        "ORA-142",
+        "BEA-113",
+        "BEA-118",
+        "BEA-121",
+        "GUA-116"
+      ],
+      "zekerheid": 0.88
+    }
+  },
+  "acties": [
+    {
+      "actie": "Stop verdere tempoverhogingen en ongecontroleerde wijzigingen; schakel de hulpslag niet abrupt uit op basis van een onbewezen oorzaak.",
+      "reden": "Dit is voorzorgsadvies: op dag 24 werd het tempo nog met 5% verhoogd, terwijl de bouwakte voor ontregeling door een tweede pols en recordverlies bij onzorgvuldig herstel waarschuwt.",
+      "bewijs": [
+        "ENG-029",
+        "HIS-109",
+        "HIS-110"
+      ]
+    },
+    {
+      "actie": "Maak vóór herstel een registerafschrift en bewaar de oorspronkelijke logs en toestemmingsbrief.",
+      "reden": "De bouwakte verlangt een afschrift vóór herstel; de geheimhoudingswens en eerder niet onafhankelijk onderzochte tijdstempelklachten maken behoud van het bewijsmateriaal extra relevant.",
+      "bewijs": [
+        "HIS-110",
+        "ARC-106",
+        "HIS-112"
+      ]
+    },
+    {
+      "actie": "Vraag onafhankelijke metingen van beide klokperioden, hun faseverschil, verkeersmomenten en schildopeningen, en laat de uitvoerder en reikwijdte van de toestemming onderzoeken.",
+      "reden": "De huidige records identificeren de uitvoerder niet en koppelen geen gemeten klokfase of verkeer aan de schildopening. De schildspecificatie en tweede-polswaarschuwing leveren alleen een toetsbare hypothese.",
+      "bewijs": [
+        "ENG-011",
+        "ENG-103",
+        "ARC-106",
+        "GUA-103",
+        "GUA-104",
+        "GUA-111",
+        "HIS-109"
+      ]
+    },
+    {
+      "actie": "Beproef na het afschrift een bewaakte, geleidelijke toenadering van de polsen, met controle op records, schilden en leylijnen; behandel dit als een herstelproef, niet als bewezen oplossing.",
+      "reden": "De bouwakte adviseert langzaam samenbrengen. De fijnregeling ondersteunt stappen van 0,1%, maar de teruggedraaide test bewijst geen veilig volledig herstel.",
+      "bewijs": [
+        "HIS-110",
+        "ENG-114",
+        "GUA-111",
+        "ARC-109"
+      ]
+    },
+    {
+      "actie": "Voer voortaan gezamenlijke incidentregistratie en expliciete wijzigingsgoedkeuring in; meet ook op tussendagen en rond dag 46.",
+      "reden": "Geheimhouding, ononderzochte tijdstempelklachten en onvolledige tussendagmetingen belemmeren onafhankelijke toetsing van zowel oorzaak als herhaling.",
+      "bewijs": [
+        "ARC-106",
+        "HIS-112",
+        "BEA-111",
+        "BEA-118",
+        "BEA-121",
+        "ORA-142"
+      ]
+    }
+  ],
+  "risicos": [
+    {
+      "risico": "Onzorgvuldig samenbrengen van de polsen kan records verloren laten gaan; dit is een waarschuwing uit de bouwakte, geen waargenomen hersteluitkomst (HIS-110).",
+      "mitigatie": "Maak eerst een registerafschrift en voer alleen bewaakte, geleidelijke stappen uit; beschouw de fijnregeling niet als veiligheidsgarantie (HIS-110, ENG-114)."
+    },
+    {
+      "risico": "Schildopeningen kunnen terugkeren terwijl de oorzaak onbekend blijft; ook dag 23 kende openingen, buiten de vierdagenreeks (GUA-111, GUA-116).",
+      "mitigatie": "Verscherp bewaking en registreer verkeer en klokfase bij elke opening; toets de specificatie zonder een infiltrant of klokoorzaak als feit aan te nemen (GUA-103, GUA-104, GUA-116)."
+    },
+    {
+      "risico": "Een schijnbaar passend klokverhaal kan andere oorzaken verdringen: lage leylijnmetingen en hogere doorvoer bewijzen geen vervuiling door het datanet (ARC-109, ENG-106).",
+      "mitigatie": "Vraag onafhankelijke, gelijktijdige metingen en beoordeel herstel op afzonderlijke symptomen in plaats van alleen doorvoer of visioenen (ARC-109, ENG-107, GUA-111, ORA-142)."
+    }
+  ],
+  "voorspelling": {
+    "dag": 46,
+    "bewering": "Zonder ingrijpen wordt op dag 46 opnieuw een zware of onrustige nacht verwacht, als extrapolatie van de vierdagenreeks tot dag 42. Dit is geen bewezen voorspelling van een schildopening of volledige Desync; het fysieke herhalingsmechanisme is onbekend.",
+    "bewijs": [
+      "ORA-110",
+      "ORA-114",
+      "ORA-118",
+      "ORA-122",
+      "ORA-126",
+      "ORA-130",
+      "ORA-134",
+      "ORA-138",
+      "ORA-142",
+      "BEA-113",
+      "BEA-118",
+      "BEA-121"
+    ]
+  }
+}
