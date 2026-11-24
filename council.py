@@ -21,6 +21,8 @@ from pathlib import Path
 from agent_framework import Agent, MCPStreamableHTTPTool
 from agent_framework.openai import OpenAIChatCompletionClient
 from dotenv import load_dotenv
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
 from openai import AsyncOpenAI, OpenAI
 
 import raadsleden
@@ -71,18 +73,24 @@ def koning_json(systeem, gebruiker, max_tokens=2000):
         except Exception as e:
             print(f"[Koning] LLM-fout (poging {poging + 1}): {e}")
             continue
-        if STAAT["verbruik"] is not None and r.usage:
-            v = STAAT["verbruik"].setdefault("groot", {"beurten": 0, "invoer": 0, "gecached": 0, "uitvoer": 0})
-            v["beurten"] += 1
-            v["invoer"] += r.usage.prompt_tokens or 0
-            details = getattr(r.usage, "prompt_tokens_details", None)
-            v["gecached"] += (getattr(details, "cached_tokens", 0) or 0) if details else 0
-            v["uitvoer"] += r.usage.completion_tokens or 0
+        tel_usage("groot", r.usage)
         data = parse_json((r.choices[0].message.content or "") if r.choices else "")
         if isinstance(data, dict):
             return data
         print(f"[Koning] onleesbare JSON (poging {poging + 1})")
     return None
+
+
+def tel_usage(naam, usage):
+    """Tokenverbruik van een rechtstreekse OpenAI-call (Koning, of Raadslid in toolmodus python)."""
+    if STAAT["verbruik"] is None or not usage:
+        return
+    v = STAAT["verbruik"].setdefault(naam, {"beurten": 0, "invoer": 0, "gecached": 0, "uitvoer": 0})
+    v["beurten"] += 1
+    v["invoer"] += getattr(usage, "prompt_tokens", 0) or 0
+    details = getattr(usage, "prompt_tokens_details", None)
+    v["gecached"] += (getattr(details, "cached_tokens", 0) or 0) if details else 0
+    v["uitvoer"] += getattr(usage, "completion_tokens", 0) or 0
 
 
 def parse_json(tekst):
@@ -409,24 +417,98 @@ def gezien_ids(response):
     return gevonden
 
 
+# ---------------------------------------------------------------- toolmodus "python"
+# Voor endpoints die geen function calling doorgeven (bv. de OpenClaw-gateway, die een agent aanspreekt):
+# het model vraagt in JSON om een tool, Python roept de MCP van die ene Rol aan en geeft het resultaat terug.
+# Zo staat elke toolcall gegarandeerd in de trace en kan een Raadslid alleen zijn eigen bron bereiken.
+
+TOOLPROTOCOL = """
+
+Je werkt in stappen. Antwoord ELKE stap met alleen een JSON-object, op één van deze twee manieren:
+  {"tool": "<toolnaam>", "argumenten": {...}}   om je Kennisbron te raadplegen; het resultaat krijg je in de volgende stap
+  {"antwoord": "<je bijdrage aan het debat>"}    als je klaar bent
+Raadpleeg je Kennisbron minstens één keer vóór je antwoordt, en lees met toon de records na die je wil noemen. Hoogstens MAX toolcalls.
+Je tools (alleen deze bestaan):
+TOOLS"""
+
+
+async def open_mcp(stack, url):
+    read, write, _ = await stack.enter_async_context(streamablehttp_client(url))
+    sessie = await stack.enter_async_context(ClientSession(read, write))
+    await sessie.initialize()
+    return sessie, (await sessie.list_tools()).tools
+
+
+def toolprotocol(tools, max_calls):
+    lijst = "\n".join(f"- {t.name}: {(t.description or '').strip()} Argumenten (JSON-schema): "
+                      f"{json.dumps(t.inputSchema, ensure_ascii=False)}" for t in tools)
+    return TOOLPROTOCOL.replace("MAX", str(max_calls)).replace("TOOLS", lijst)
+
+
+async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4):
+    """Eén Raadslid-beurt met toolloop in Python. Geeft (tekst, [(tool, argumenten)], gezien_ids) terug."""
+    namen = {t.name for t in tools}
+    berichten = [{"role": "system", "content": systeem + toolprotocol(tools, max_calls)},
+                 {"role": "user", "content": prompt}]
+    calls, gezien, tekst = [], set(), ""
+    for _ in range(max_calls + 3):
+        r = await llm.chat.completions.create(model=os.environ["MODEL_KLEIN"], messages=berichten)
+        tel_usage("klein", r.usage)
+        tekst = ((r.choices[0].message.content or "") if r.choices else "").strip()
+        data = parse_json(tekst) or {}
+        berichten.append({"role": "assistant", "content": tekst})
+        tool = data.get("tool")
+        if tool in namen and len(calls) < max_calls:
+            args = data.get("argumenten") if isinstance(data.get("argumenten"), dict) else {}
+            try:
+                res = await sessie.call_tool(tool, args)
+                uit = "\n".join(getattr(c, "text", "") or "" for c in res.content) or "(leeg resultaat)"
+            except Exception as e:
+                uit = f"Toolfout: {e}"
+            calls.append((tool, args))
+            gezien.update(ids_in(uit))
+            berichten.append({"role": "user", "content": f"Resultaat van {tool}:\n{uit[:15000]}\n\nVolgende stap (alleen JSON)."})
+            continue
+        if not calls:
+            berichten.append({"role": "user", "content": 'Raadpleeg eerst je Kennisbron. Antwoord met {"tool": "...", "argumenten": {...}}.'})
+            continue
+        antwoord = data.get("antwoord")
+        if isinstance(antwoord, str) and antwoord.strip():
+            return antwoord.strip(), calls, gezien
+        if tool and len(calls) >= max_calls:
+            berichten.append({"role": "user", "content": 'Geen toolcalls meer. Geef nu je antwoord als {"antwoord": "..."}.'})
+            continue
+        if tekst and not tekst.lstrip().startswith("{"):
+            return tekst, calls, gezien  # gewoon tekst na minstens één toolcall: aanvaarden als antwoord
+        berichten.append({"role": "user", "content": 'Onleesbaar. Antwoord met {"tool": ...} of {"antwoord": "..."}.'})
+    return tekst or "(geen antwoord)", calls, gezien
+
+
 async def run():
     load_dotenv(ROOT / ".env")
+    toolmodus = os.getenv("TOOLMODUS", "native").strip().lower()
+    out = Path(os.getenv("COUNCIL_OUTPUT_DIR", "").strip() or ROOT)
+    out = out if out.is_absolute() else ROOT / out
+    out.mkdir(parents=True, exist_ok=True)
     opties = {"reasoning_effort": os.environ["REASONING"]} if os.getenv("REASONING") else None  # minder denkwerk = minder tokens
     run_id = f"{datetime.now().astimezone().isoformat(timespec='seconds')}_{uuid.uuid4().hex[:8]}"
     leden = raadsleden.alle()
     controleer(leden)
     beurten, verbruik = [], {}
     STAAT.update(verbruik=verbruik, gezien={}, open_vragen=[])
-    trace = {"run_id": run_id, "status": "bezig", "raadsleden": [l.ROL for l in leden], "beurten": beurten, "geschillen": [], "verbruik": verbruik}
+    trace = {"run_id": run_id, "status": "bezig", "raadsleden": [l.ROL for l in leden], "beurten": beurten, "geschillen": [], "verbruik": verbruik,
+             "modellen": {"raadsleden": os.environ["MODEL_KLEIN"], "koning": os.environ["MODEL_GROOT"], "toolmodus": toolmodus}}
 
     def bewaar(naam, data):
-        (ROOT / naam).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        (out / naam).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def beurt(ronde, spreker, soort, **velden):
         beurten.append({"nr": len(beurten) + 1, "ronde": ronde, "spreker": spreker, "soort": soort, **velden})
         bewaar("trace.json", trace)  # na elke beurt: de viewer (`uv run viewer`) toont het debat live
 
     klein = client("MODEL_KLEIN")
+    llm = AsyncOpenAI(base_url=os.environ["OPENAI_BASE_URL"], api_key=os.environ["OPENAI_API_KEY"], max_retries=8)
+    sessies = {}  # toolmodus python: rol -> (MCP-sessie, tools) van alleen die Rol
 
     async with AsyncExitStack() as stack:
         agents = []
@@ -436,7 +518,10 @@ async def run():
             tools = []
             if mcp_url:
                 try:
-                    tools.append(await stack.enter_async_context(MCPStreamableHTTPTool(name=f"kennisbron_{lid.ROL}", url=mcp_url)))
+                    if toolmodus == "python":
+                        sessies[lid.ROL] = await open_mcp(stack, mcp_url)
+                    else:
+                        tools.append(await stack.enter_async_context(MCPStreamableHTTPTool(name=f"kennisbron_{lid.ROL}", url=mcp_url)))
                 except Exception as e:
                     sys.exit(f"MCP voor {lid.NAAM} ({mcp_url}) is onbereikbaar: {e}\n"
                              f"Is de server al open (vanaf 10:00)? Klopt het pad /{lid.ROL}/mcp? "
@@ -447,7 +532,7 @@ async def run():
                 beurt(0, lid.ROL, "bestand", bestand=f"{lid.ROL}/{p.name}")
             agents.append((lid, mcp_url, Agent(klein, instructies(lid, bestanden, mcp_url), name=lid.ROL, tools=tools)))
 
-        (ROOT / "verdict.json").unlink(missing_ok=True)  # setup gelukt: geen Verdict van een vorige run laten staan
+        (out / "verdict.json").unlink(missing_ok=True)  # setup gelukt: geen Verdict van een vorige run laten staan
         bewaar("trace.json", trace)
         per_rol = {lid.ROL: (lid, mcp_url, agent) for lid, mcp_url, agent in agents}
         ronde = 1
@@ -473,6 +558,15 @@ async def run():
                       + f"\n\nVraag van de Koning aan jou: {vraag}")
             trace["aan_het_woord"] = rol
             bewaar("trace.json", trace)
+            if rol in sessies:  # toolmodus python
+                sessie, mcp_tools = sessies[rol]
+                tekst, calls, gezien = await spreek_python(llm, instructies(lid, [], mcp_url), prompt, sessie, mcp_tools)
+                for tool, args in calls:
+                    beurt(ronde, rol, "toolcall", tool=tool, argumenten=args, pad=mcp_url)
+                STAAT["gezien"].setdefault(rol, set()).update(gezien)
+                beurt(ronde, rol, "bericht", tekst=tekst)
+                print(f"\n[ronde {ronde}] {lid.NAAM}:\n{tekst}")
+                continue
             r = await agent.run(prompt, options=opties)
             tel(verbruik, "klein", r.usage_details)
             calls = list(toolcalls(r))
@@ -506,7 +600,7 @@ async def run():
     bewaar("trace.json", trace)
     bewaar("verdict.json", verdict)
 
-    print(f"\nKlaar: verdict.json en trace.json geschreven (run_id {run_id}).")
+    print(f"\nKlaar: verdict.json en trace.json geschreven in {out} (run_id {run_id}).")
     for model, v in verbruik.items():
         print(f"Verbruik {model}: {v['beurten']} beurten, {v['invoer']} tokens in ({v['gecached']} gecached), {v['uitvoer']} tokens uit")
 

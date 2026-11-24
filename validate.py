@@ -7,6 +7,8 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).parent
+# `uv run validate` toetst de repo-root; `uv run validate runs/proef` een aparte uitvoermap.
+DATA = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT
 # Modellen schrijven ID's soms met een speciaal koppelteken (bv. U+2011): dat faalt op het schema.
 RARE_STREEP = re.compile("(ARC|ENG|GUA|HIS|ORA|BEA)[‐‑‒–—―−][0-9]{3}")
 ROLLEN = ("archmage", "engineer", "guardian_keeper", "historian", "oracle", "beast_master")
@@ -30,9 +32,9 @@ def spelregels(trace):
 
 
 def fouten(naam):
-    pad = ROOT / naam
+    pad = DATA / naam
     if not pad.exists():
-        return None, [f"{naam} ontbreekt in de root van de repo"]
+        return None, [f"{naam} ontbreekt in {DATA}"]
     data = json.loads(pad.read_text(encoding="utf-8"))
     schema = json.loads((ROOT / "schema" / naam).read_text(encoding="utf-8"))
     return data, [f"{naam}: {'/'.join(map(str, e.absolute_path)) or '(root)'}: {e.message}"
