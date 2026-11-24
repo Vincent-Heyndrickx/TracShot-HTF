@@ -110,6 +110,7 @@
   #zitplan .voorzitter use { color: var(--voorzitter); }
   #zitplan .voorzitter.spreekt use { color: var(--vel); }
   #zitplan .voorzitter text { fill: var(--voorzitter); font: 700 11px var(--sans); letter-spacing: .06em; }
+  #zitplan .voorzitter.spreekt text { fill: var(--vel); }
   .zit-uitleg { margin: 4px 0 0; color: var(--stil); font-size: .78rem; }
 
   /* ---------- budget ---------- */
@@ -190,7 +191,7 @@
   .al.bron code { font: .78rem/1.3 var(--mono); color: var(--inkt); background: var(--gezet); padding: 1px 5px; overflow-wrap: anywhere; }
   .vlag { color: var(--fout); font-weight: 700; display: inline-flex; gap: 4px; align-items: center; }
 
-  .al.live .tekst::after { content: ""; display: inline-block; width: .45em; height: 1.05em; vertical-align: -.18em; margin-left: 3px; background: var(--k, var(--inkt)); animation: knipper 1s steps(2) infinite; }
+  .al.live .tekst > p:last-child::after { content: ""; display: inline-block; width: .45em; height: 1.05em; vertical-align: -.18em; margin-left: 3px; background: var(--k, var(--inkt)); animation: knipper 1s steps(2) infinite; }
   .al.live { background: var(--gezet); }
   .al.live .stap { font: 600 .74rem var(--sans); color: var(--stil); display: block; margin-top: 2px; }
   @keyframes knipper { 50% { opacity: 0; } }
