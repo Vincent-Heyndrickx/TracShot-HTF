@@ -542,12 +542,13 @@ function tekenZitplan(t, a, spreekt) {
     zetels[r] = { x, y };
     const n = a.tel[r]?.berichten || 0;
     const delen = naam(r).split(" "), LH = PITCH ? 18 : 13;
+    const buiten = PITCH && (i === 0 || i === ROLLEN.length - 1);   // beamer: buitenste labels onder de zetel, anders botsen ze
     const cls = ["zetel", leden.includes(r) ? "" : "afwezig", spreekt === r ? "spreekt" : ""].join(" ");
     const label = delen.map((d, j) => `<tspan x="${x}" dy="${j ? LH : 0}">${esc(d)}</tspan>`).join("");
     return `<g class="${cls}" style="--k:${kleur(r)}"><title>${esc(naam(r))}: ${n} beurten${leden.includes(r) ? "" : " (niet in de Raad)"}</title>
       ${spreekt === r ? `<circle class="halo" cx="${x}" cy="${y}" r="22"/>` : ""}<circle class="bank" cx="${x}" cy="${y}" r="22"/>
       <use href="#s-${r}" x="${x - 12}" y="${y - 12}" width="24" height="24"/>
-      <text x="${x}" y="${y - (PITCH ? 33 : 31) - LH * (delen.length - 1)}" text-anchor="middle">${label}</text>${n ? `<text class="tel" x="${x + 27}" y="${y + 4}" text-anchor="start">${n}×</text>` : ""}</g>`;
+      <text x="${x}" y="${buiten ? y + 40 : y - (PITCH ? 33 : 31) - LH * (delen.length - 1)}" text-anchor="middle">${label}</text>${n ? (PITCH && !buiten ? `<text class="tel" x="${x}" y="${y + 42}" text-anchor="middle">${n}×</text>` : `<text class="tel" x="${x + 27}" y="${y + 4}" text-anchor="start">${n}×</text>`) : ""}</g>`;
   });
   const telRoute = {}; a.routes.forEach(r => telRoute[r] = (telRoute[r] || 0) + 1);
   const VX = CX, VY = CY + 6;
@@ -556,7 +557,7 @@ function tekenZitplan(t, a, spreekt) {
   const sporen = Object.entries(telRoute).map(([r, n]) => pad(r, "", 1 + n * 1.6)).join("");
   const laatste = a.laatsteRoute ? pad(a.laatsteRoute.aan, "laatste", 3) : "";
   const k = spreekt === "koning" ? "spreekt" : "";
-  const html = `<svg viewBox="0 0 440 290" role="img" aria-label="Zitplan: de Koning zit voor, de zes Rollen in een halfrond. Lijnen tonen aan wie de Koning het woord gaf.${spreekt ? ` Nu spreekt ${esc(naam(spreekt))}.` : ""}">
+  const html = `<svg viewBox="0 0 440 ${PITCH ? 300 : 290}" role="img" aria-label="Zitplan: de Koning zit voor, de zes Rollen in een halfrond. Lijnen tonen aan wie de Koning het woord gaf.${spreekt ? ` Nu spreekt ${esc(naam(spreekt))}.` : ""}">
     <path class="banken" d="M${CX - R} ${CY} A${R} ${R} 0 0 1 ${CX + R} ${CY}"/>${sporen}${laatste}${seats.join("")}
     <g class="voorzitter ${k}"><rect x="${VX - 54}" y="${VY - 20}" width="108" height="36"/><use href="#s-koning" x="${VX - 46}" y="${VY - 13}" width="22" height="22"/><text x="${VX + 12}" y="${VY + 3}" text-anchor="middle">KONING</text></g></svg>`;
   // alleen vervangen als iets veranderde, anders start de lijn-animatie opnieuw
