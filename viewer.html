@@ -202,6 +202,41 @@
     .bubbel { width: calc(100% - 24px); left: 12px !important; font-size: .88rem; }
   }
 
+  /* ---------- de zaal bij nacht: een echte plek, en het licht wijst de spreker aan ---------- */
+  @property --nu { syntax: "<color>"; inherits: true; initial-value: #e3b23c; }
+  @property --a { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+  .spel { position: relative; transition: --nu .9s ease-out; background:
+      radial-gradient(ellipse 62% 58% at 50% 58%, color-mix(in srgb, var(--nu) 24%, transparent), transparent 72%),
+      radial-gradient(ellipse 120% 70% at 50% 118%, #3a2114, transparent 62%),
+      linear-gradient(#05080e, #111a29 48%, #090d15); }
+  .spel::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(101deg, transparent 17%, rgb(244 239 226 / .08) 24%, transparent 31%),
+      linear-gradient(88deg, transparent 43%, rgb(244 239 226 / .1) 50%, transparent 57%),
+      linear-gradient(76deg, transparent 67%, rgb(244 239 226 / .07) 75%, transparent 82%);
+    -webkit-mask-image: linear-gradient(#000, transparent 88%); mask-image: linear-gradient(#000, transparent 88%); animation: schijnsel 8s ease-in-out infinite alternate; }
+  @keyframes schijnsel { from { opacity: .5; } to { opacity: 1; } }
+  .spel::after { content: ""; position: absolute; inset: 0 0 -220px; pointer-events: none; opacity: .55; background-size: 360px 220px; animation: stof 26s linear infinite;
+    background-image: radial-gradient(1.5px 1.5px at 20% 30%, var(--goud), transparent), radial-gradient(1px 1px at 70% 62%, var(--licht), transparent),
+      radial-gradient(2px 2px at 45% 82%, var(--goud), transparent), radial-gradient(1px 1px at 86% 14%, var(--licht), transparent), radial-gradient(1.5px 1.5px at 9% 72%, var(--licht), transparent); }
+  @keyframes stof { to { transform: translateY(-220px); } }
+  .tafel { filter: drop-shadow(0 0 46px color-mix(in srgb, var(--nu) 50%, transparent)); }
+  .tafel::before { content: ""; position: absolute; inset: 1.5%; opacity: .7; border-radius: 50%; pointer-events: none; animation: draai 90s linear infinite;
+    background: repeating-conic-gradient(from var(--a), color-mix(in srgb, var(--goud) 75%, transparent) 0 .8deg, transparent .8deg 5deg);
+    -webkit-mask-image: radial-gradient(closest-side, transparent 92%, #000 93% 97%, transparent 98%); mask-image: radial-gradient(closest-side, transparent 92%, #000 93% 97%, transparent 98%); }
+  .tafel::after { content: ""; position: absolute; inset: 1.5%; border-radius: 50%; pointer-events: none; border: 1px solid color-mix(in srgb, var(--goud) 55%, transparent); }
+  @keyframes draai { to { --a: 360deg; } }
+  .tafeltitel { font-size: clamp(1.15rem, 2.5vw, 1.9rem); text-shadow: 0 2px 0 rgb(0 0 0 / .4), 0 0 28px color-mix(in srgb, var(--nu) 60%, transparent); }
+  .portret { width: 104px; height: 104px; } .zetel.koning .portret { width: 124px; height: 124px; }
+  .zetel.koning::before { content: ""; position: absolute; left: 50%; top: 62px; width: 250px; height: 250px; translate: -50% -50%; border-radius: 50%; z-index: -1; pointer-events: none;
+    background: repeating-conic-gradient(from var(--a), color-mix(in srgb, var(--goud) 34%, transparent) 0 2.5deg, transparent 2.5deg 12deg); animation: draai 60s linear infinite;
+    -webkit-mask-image: radial-gradient(closest-side, transparent 48%, #000 52%, transparent); mask-image: radial-gradient(closest-side, transparent 48%, #000 52%, transparent); }
+  .zetel.spreekt::before { content: ""; position: absolute; left: 50%; bottom: 22%; width: 320px; height: 900px; translate: -50% 0; z-index: -1; pointer-events: none; filter: blur(14px);
+    background: linear-gradient(to top, transparent, color-mix(in srgb, var(--k) 40%, transparent) 9%, transparent 80%); clip-path: polygon(44% 0, 56% 0, 100% 100%, 0 100%); animation: lichtaan .7s cubic-bezier(.16, 1, .3, 1) both; }
+  @keyframes lichtaan { from { opacity: 0; clip-path: polygon(49% 0, 51% 0, 56% 100%, 44% 100%); } }
+  .zetel.spreekt .portret { outline: 2px solid var(--goud); outline-offset: 4px; } .zetel.spreekt .naambord { margin-top: 10px; background: var(--zaal); }
+  .zaal:has(.zetel.spreekt) .zetel:not(.spreekt):not(.koning) .portret { filter: saturate(.5) brightness(.58); }
+  @media (max-width: 720px) { .portret { width: 58px; height: 58px; } .zetel.koning .portret { width: 68px; height: 68px; } .zetel.koning::before { width: 130px; height: 130px; top: 34px; } .zetel.spreekt::before { width: 160px; } }
+
   /* ---------- zitplan (halfrond) ---------- */
   #zitplan svg { display: block; width: 100%; height: auto; }
   #zitplan .bank { fill: var(--vel); stroke: var(--k); stroke-width: 2; }
@@ -879,6 +914,7 @@ function tekenSpel(t, a, spreekt) {
     el.classList.toggle("afwezig", !k && !leden.includes(r));
     el.classList.toggle("gesproken", n > 0);
     el.classList.toggle("spreekt", spreekt === r);
+    if (spreekt === r) $("spel").style.setProperty("--nu", kleur(r));
     el.querySelector(".teller").textContent = k ? `${a.openRoutes.length} ${a.openRoutes.length === 1 ? "keuze" : "keuzes"}` : n ? `${n}× aan het woord` : "nog niet";
   }
   // Sporen: elke keuze van de Koning is een lijn van de troon naar die zetel; de laatste stroomt zolang de zitting loopt.
