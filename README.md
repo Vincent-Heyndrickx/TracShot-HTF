@@ -63,6 +63,8 @@ Geen uv? Maak een venv (`python -m venv .venv`, activeer met `.venv\Scripts\acti
 
 Viewer op een andere poort: zet `VIEWER_PORT=8101` als omgevingsvariabele. Een andere map bekijken, bv. het voorbeeld: `uv run viewer voorbeeld`.
 
+Een run starten kan ook in de viewer, met de knop **Start een run** (de uitvoer komt in `council.log`). Lokaal werkt die knop meteen. Draait de viewer achter een proxy (bv. nginx op een server), dan vraagt de knop de startsleutel uit `VIEWER_START_KEY` (omgeving of `.env`). Zonder die sleutel kan niemand van buitenaf een run starten.
+
 ## Hoe de kit werkt
 
 ```

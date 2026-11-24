@@ -74,6 +74,14 @@
   .knop:hover { background: var(--gezet); }
   .knop[aria-pressed="true"] { background: var(--inkt); color: var(--papier); }
   .knop[hidden] { display: none; }
+  .knop.hoofd { background: var(--voorzitter); border-color: var(--voorzitter); color: var(--vel); }
+  .knop.hoofd:hover { background: color-mix(in srgb, var(--voorzitter) 85%, var(--inkt)); }
+  .knop:disabled { opacity: .55; cursor: not-allowed; }
+  .startform { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; font: 600 .78rem var(--sans); }
+  .startform[hidden], .startmelding[hidden] { display: none; }
+  .startform input { font: 400 .9rem var(--sans); color: var(--inkt); background: var(--vel); border: 1px solid var(--lijn-sterk); padding: 6px 10px; min-height: 34px; width: 16em; max-width: 100%; }
+  .startmelding { flex-basis: 100%; margin: 0; text-align: right; font: 500 .82rem var(--sans); color: var(--zacht); }
+  .startmelding.fout { color: var(--fout); font-weight: 600; }
   .mini-budget { display: none; flex-basis: 100%; }
   .naar-live { position: fixed; left: 50%; transform: translateX(-50%); bottom: 22px; z-index: 6; background: var(--inkt); color: var(--papier); border: 0; padding: 10px 18px; font: 700 .85rem var(--sans); cursor: pointer; box-shadow: 0 6px 18px color-mix(in srgb, var(--inkt) 25%, transparent); }
   .naar-live[hidden] { display: none; }
@@ -316,10 +324,16 @@
   <span id="verbinding" class="verbinding"><i></i><span>verbinden</span></span>
   <span id="status" role="status" aria-live="polite">Wacht op een zitting</span>
   <nav aria-label="Weergave">
+    <button class="knop hoofd" id="start" type="button" hidden>Start een run</button>
     <a class="knop" href="#verdict" id="naar-verdict" hidden>Naar het Verdict</a>
     <button class="knop" id="pitch" type="button" aria-pressed="false" title="Grotere letters, volgt het debat automatisch">Beamer</button>
     <button class="knop" id="thema" type="button">Dag of nacht</button>
   </nav>
+  <form class="startform" id="startform" hidden>
+    <label for="startsleutel">Startsleutel</label><input id="startsleutel" type="password" autocomplete="off" required>
+    <button class="knop hoofd" type="submit">Start de run</button><button class="knop" type="button" id="start-annuleer">Annuleren</button>
+  </form>
+  <p class="startmelding" id="startmelding" role="status" aria-live="polite" hidden></p>
   <div class="mini-budget" aria-hidden="true"><ol class="budget" id="budget-mini"></ol></div>
 </header>
 <button class="naar-live" id="naar-live" type="button" hidden><svg class="ic"><use href="#s-volg"/></svg> Volg het debat live</button>
@@ -760,6 +774,49 @@ setInterval(() => {
     zet();
   });
 })();
+
+/* ---------- run starten en stoppen vanuit de viewer ---------- */
+const RUN = { staat: null, stopKlaar: false };
+const sleutelLees = () => { try { return sessionStorage.getItem("startsleutel") || ""; } catch { return ""; } };
+const sleutelZet = k => { try { k ? sessionStorage.setItem("startsleutel", k) : sessionStorage.removeItem("startsleutel"); } catch {} };
+function meld(tekst, fout) { const m = $("startmelding"); m.hidden = !tekst; m.textContent = tekst || ""; m.classList.toggle("fout", !!fout); }
+async function haalRun() {
+  try { const r = await fetch("run", { cache: "no-store" }); if (!r.ok) throw 0; RUN.staat = await r.json(); } catch { RUN.staat = null; }
+  tekenStart();
+}
+function tekenStart() {
+  const k = $("start"), st = RUN.staat;
+  k.hidden = !st || (!st.lokaal && !st.sleutel_kan);   // via internet zonder ingestelde sleutel: geen knop
+  if (k.hidden) return;
+  k.disabled = false;
+  if (st.eigen) { k.textContent = RUN.stopKlaar ? "Zeker stoppen?" : "Stop de run"; k.classList.remove("hoofd"); }
+  else if (st.bezig) { k.textContent = "Run bezig"; k.disabled = true; k.classList.remove("hoofd"); }
+  else { k.textContent = "Start een run"; k.classList.add("hoofd"); }
+}
+async function stuurRun(pad) {
+  const k = $("start"); k.disabled = true;
+  try {
+    const r = await fetch(pad, { method: "POST", headers: { "X-Start-Key": sleutelLees() } });
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 403) { sleutelZet(""); $("startform").hidden = false; $("startsleutel").focus(); meld(d.fout || "Geen toegang.", true); }
+    else if (!r.ok) meld(d.fout || `Mislukt (${r.status}).`, true);
+    else { meld(pad === "start" ? "De run is gestart: de Koning kiest zo de eerste spreker." : "De run wordt gestopt."); $("startform").hidden = true; S.volg = true; }
+  } catch { meld("Geen verbinding met de viewer.", true); }
+  await haalRun();
+}
+$("start").addEventListener("click", () => {
+  const st = RUN.staat; if (!st) return;
+  if (st.eigen) {
+    if (!RUN.stopKlaar) { RUN.stopKlaar = true; tekenStart(); setTimeout(() => { RUN.stopKlaar = false; tekenStart(); }, 4000); return; }
+    RUN.stopKlaar = false; return stuurRun("stop");
+  }
+  if (!st.lokaal && !sleutelLees()) { $("startform").hidden = false; meld(""); $("startsleutel").focus(); return; }
+  stuurRun("start");
+});
+$("startform").addEventListener("submit", e => { e.preventDefault(); sleutelZet($("startsleutel").value.trim()); $("startsleutel").value = ""; stuurRun("start"); });
+$("start-annuleer").addEventListener("click", () => { $("startform").hidden = true; meld(""); });
+haalRun();
+setInterval(haalRun, 5000);
 
 /* ---------- transport: Server-Sent Events, met ophalen als vangnet ---------- */
 let BRON = "sse";
