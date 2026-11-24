@@ -279,6 +279,22 @@
   .portret canvas { width: 100%; height: 100%; display: block; border-radius: 50%; background: radial-gradient(circle at 34% 24%, color-mix(in srgb, var(--k) 58%, #1a1c1e), color-mix(in srgb, var(--k) 22%, #05070b) 78%); }
   .portret.d3 svg { display: none; }
 
+  /* ---------- 3D: de Raad zit aan de tafel (achterste zetels achter het tafelblad, voorste ervoor) ---------- */
+  .zaal:has(.d3z) .tafel, .zaal:has(.d3z) .sporen { z-index: 1; }
+  .zetel.d3z { z-index: 0; gap: 2px; } .zetel.d3z.voor { z-index: 2; }
+  .zetel.d3z.achter .portret { order: 3; } .zetel.d3z.koning { z-index: 2; } .zaal:has(.zetel.spreekt) .zetel.d3z:not(.spreekt):not(.koning) .portret { filter: saturate(.8) brightness(.82); }
+  .zetel.d3z .portret { width: 150px; height: 150px; border: 0; border-radius: 0; background: none; box-shadow: none; outline: 0; animation: none; }
+  .zetel.d3z.koning .portret { width: 176px; height: 176px; }
+  .zetel.d3z .portret::before, .zetel.d3z::after, .zetel.d3z.koning::before { display: none; }
+  .zetel.d3z .portret canvas { border-radius: 0; background: none; filter: drop-shadow(0 14px 14px rgb(0 0 0 / .6)); -webkit-mask-image: linear-gradient(#000 80%, transparent 98%); mask-image: linear-gradient(#000 80%, transparent 98%); }
+  .zetel.d3z.achter:not(.koning) .portret canvas { -webkit-mask-image: none; mask-image: none; }
+  .zetel.d3z.spreekt .portret { transform: scale(1.1); box-shadow: none; outline: 0; }
+  .zetel.d3z.spreekt .portret canvas { filter: drop-shadow(0 0 22px color-mix(in srgb, var(--k) 85%, transparent)) drop-shadow(0 14px 14px rgb(0 0 0 / .6)); }
+  .zetel.d3z.spreekt .naambord { margin-top: 0; }
+  :root.pitch .zetel.d3z .portret { width: 190px; height: 190px; } :root.pitch .zetel.d3z.koning .portret { width: 220px; height: 220px; }
+  .spel:fullscreen .zetel.d3z .portret { width: 210px; height: 210px; } .spel:fullscreen .zetel.d3z.koning .portret { width: 240px; height: 240px; }
+  @media (max-width: 720px) { .zetel.d3z .portret { width: 84px; height: 84px; } .zetel.d3z.koning .portret { width: 96px; height: 96px; } }
+
   /* ---------- volledig scherm: alleen de zaal, om het debat te volgen ---------- */
   .vol-uit { display: none; position: absolute; z-index: 5; top: 16px; right: 18px; font: 700 .85rem/1 var(--sans); color: var(--licht); background: rgb(5 8 14 / .6); border: 1px solid color-mix(in srgb, var(--licht) 45%, transparent); padding: 9px 14px; cursor: pointer; }
   .vol-uit:hover, .vol-uit:focus-visible { background: var(--licht); color: var(--zaal); }
@@ -932,7 +948,7 @@ function tekenVerdict() {
 
 
 /* ---------- speltafel: zetels, munten, sporen en de spreekballon ---------- */
-const PLAATS = { koning: [50, 18], archmage: [15, 34], engineer: [10, 64], guardian_keeper: [29, 82], historian: [71, 82], oracle: [90, 64], beast_master: [85, 34] };
+const PLAATS = { koning: [50, 19], archmage: [29, 26], engineer: [17, 54], guardian_keeper: [31, 84], historian: [69, 84], oracle: [83, 54], beast_master: [71, 26] };
 const SPEL = { sleutel: null, bubbelVan: null, weg: null, laatsteNr: 0 };
 function avatar(rol) { return `<svg viewBox="0 0 100 100" aria-hidden="true">${document.getElementById(`a-${PLAATS[rol] ? rol : "koning"}`).innerHTML}</svg>`; }
 const ZACHT = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1110,12 +1126,13 @@ $("spel").addEventListener("pointermove", e => { if (ZACHT()) return; const k = 
 function start3d() {
   if (!window.THREE) return;
   let rnd; try { rnd = new THREE.WebGLRenderer({ alpha: true, antialias: true }); } catch (e) { return; }
-  const N = 240, PI = Math.PI; rnd.setPixelRatio(1); rnd.setSize(N, N, false);
-  const cam = new THREE.PerspectiveCamera(30, 1, .1, 50); cam.position.set(0, .3, 6.6); cam.lookAt(0, .1, 0);
+  const N = 320, PI = Math.PI; rnd.setPixelRatio(1); rnd.setSize(N, N, false);
+  const cam = new THREE.PerspectiveCamera(37, 1, .1, 50); cam.position.set(0, 1.2, 6.5); cam.lookAt(0, .05, 0);
   const G = { bol: new THREE.SphereGeometry(1, 32, 22), cil: new THREE.CylinderGeometry(1, 1, 1, 28), kegel: new THREE.ConeGeometry(1, 1, 24), ring: new THREE.TorusGeometry(1, .14, 12, 32),
     blok: new THREE.BoxGeometry(1, 1, 1), half: new THREE.SphereGeometry(1, 32, 16, 0, PI * 2, 0, PI / 2) };
   const mats = {}, M = c => mats[c] || (mats[c] = new THREE.MeshStandardMaterial({ color: c, roughness: .6 }));
   const GOUD = new THREE.MeshStandardMaterial({ color: 0xe3b23c, roughness: .35, metalness: .3 }), STAAL = new THREE.MeshStandardMaterial({ color: 0xb4bfcd, roughness: .38, metalness: .2 });
+  const BLOS = new THREE.MeshStandardMaterial({ color: 0xd9705e, transparent: true, opacity: .35, roughness: .9 });
   const d = (g, c, pos, s, ouder, rot) => { const x = new THREE.Mesh(G[g], typeof c === "number" ? M(c) : c); x.position.set(...pos);
     Array.isArray(s) ? x.scale.set(...s) : x.scale.setScalar(s); if (rot) x.rotation.set(...rot); ouder.add(x); return x; };
   const R = { koning: [0xe6b98f, 0x9c211b, 0x73391a, 0xef7d72], archmage: [0xecc9a6, 0x5b3fa8, 0xf1f1f4, 0xb79cf0], engineer: [0xa9744d, 0x1d7f71, 0x2b1d14, 0x5fcbb8],
@@ -1126,10 +1143,17 @@ function start3d() {
     const zon = new THREE.DirectionalLight(0xfff0d8, .7); zon.position.set(-2.5, 3, 4); sc.add(zon);
     const tegen = new THREE.DirectionalLight(rand, .75); tegen.position.set(3, 1.5, -3); sc.add(tegen);
     sc.add(fig); fig.add(kop); kop.position.set(0, .25, 0); kop.add(ogen);
+    const troon = rol === "koning", hout = 0x4a2d18, rh = troon ? 3.9 : 3.1;
+    d("blok", hout, [0, -2.2 + rh / 2, -.95], [2.1, rh, .22], sc); d("cil", hout, [0, -2.2 + rh, -.95], [1.05, .22, 1.05], sc, [PI / 2, 0, 0]);
+    d("blok", stof, [0, -2.2 + rh / 2, -.83], [1.7, rh - .3, .06], sc); d("cil", stof, [0, -2.2 + rh - .1, -.83], [.85, .06, .85], sc, [PI / 2, 0, 0]);
+    for (const k of [-1, 1]) d("bol", troon ? GOUD : hout, [k * 1.05, -2.2 + rh + .05, -.95], troon ? .2 : .15, sc);
     d("bol", stof, [0, -1.8, 0], [1.4, .98, .86], fig); d("cil", huid, [0, -.72, 0], [.3, .5, .3], fig);
+    for (const k of [-1, 1]) { d("bol", stof, [k * 1.15, -1.45, .1], [.42, .5, .42], fig); d("cil", stof, [k * 1.05, -1.95, .55], [.24, 1.1, .24], fig, [1.1, 0, k * .25]); d("bol", huid, [k * .9, -2.2, 1.05], .22, fig); }
     d("bol", huid, [0, 0, 0], [.8, .9, .8], kop); d("bol", huid, [-.8, 0, 0], .14, kop); d("bol", huid, [.8, 0, 0], .14, kop);
     const dicht = rol === "oracle";
-    for (const k of [-1, 1]) { d("bol", 0x1a1210, [k * .3, .08, .72], [.09, dicht ? .02 : .12, .06], ogen); if (!dicht) d("bol", 0xffffff, [k * .27, .13, .775], .028, ogen);
+    for (const k of [-1, 1]) { if (dicht) d("bol", 0x1a1210, [k * .3, .06, .73], [.13, .022, .05], ogen);
+      else { d("bol", 0xfbf7ee, [k * .3, .08, .66], [.17, .2, .12], ogen); d("bol", 0x1a1210, [k * .3, .07, .755], [.095, .12, .05], ogen); d("bol", 0xffffff, [k * .26, .14, .8], .03, ogen); }
+      d("bol", 0xd9705e, [k * .5, -.2, .58], [.14, .09, .06], kop).material = BLOS;
       d("blok", wenk, [k * .3, .31, .74], [.25, .055, .05], kop, [0, 0, -k * .13]); }
     d("bol", huid, [0, -.12, .8], [.09, .12, .1], kop);
     const baard = rol === "koning" || rol === "archmage", mond = d("bol", 0x3a1210, [0, -.42, baard ? .9 : .73], [.17, .035, .06], kop);
@@ -1167,18 +1191,21 @@ function start3d() {
   window.av3d = () => {
     zetels = [...$("zetels").children].map((el, i) => { const rol = el.dataset.rol, pt = el.querySelector(".portret"); if (!R[rol]) return null;
       const c = document.createElement("canvas"); c.width = c.height = N; pt.prepend(c); pt.classList.add("d3");
-      return { el, i, rol, x: PLAATS[rol][0], ctx: c.getContext("2d"), m: modellen[rol] || (modellen[rol] = bouw(rol)) }; }).filter(Boolean);
+      el.classList.add("d3z", PLAATS[rol][1] < 60 ? "achter" : "voor");
+      return { el, i, rol, x: PLAATS[rol][0], y: PLAATS[rol][1], ctx: c.getContext("2d"), m: modellen[rol] || (modellen[rol] = bouw(rol)) }; }).filter(Boolean);
   };
-  let vorig = 0;
+  let vorig = 0, pan = null;
   function tik(ms) {
     requestAnimationFrame(tik);
     if (document.hidden || !zetels.length || !zetels[0].el.isConnected || ms - vorig < (ZACHT() ? 500 : 30)) return;
     vorig = ms; const t = ZACHT() ? 0 : ms / 1000, spreker = zetels.find(z => z.el.classList.contains("spreekt"));
+    if (pan !== (spreker ? spreker.rol : "")) { pan = spreker ? spreker.rol : ""; $("hal").style.setProperty("--px", spreker ? ((spreker.x - 50) / 34).toFixed(2) : "0"); }
     for (const z of zetels) { const m = z.m, praat = z.el.classList.contains("praat"), zelf = spreker === z;
-      const doel = spreker && !zelf ? Math.max(-.7, Math.min(.7, (spreker.x - z.x) / 55)) : Math.sin(t * .5 + z.i * 1.7) * .14;
-      m.kijk += (doel - m.kijk) * .08; m.kop.rotation.y = m.kijk;
+      const naar = (tx, ty, max) => Math.max(-max, Math.min(max, Math.atan2(tx - z.x, ty - z.y)));
+      const romp = z.rol === "koning" ? 0 : naar(50, 53, .75), doel = (spreker && !zelf ? naar(spreker.x, spreker.y, 1.25) : romp) + Math.sin(t * .5 + z.i * 1.7) * .1;
+      m.kijk += (doel - m.kijk) * .07; m.kop.rotation.y = m.kijk - romp;
       m.kop.rotation.x = Math.sin(t * .9 + z.i) * .035 + (praat ? Math.sin(t * 9) * .05 : 0); m.kop.rotation.z = Math.sin(t * .6 + z.i * 2) * .025;
-      m.fig.position.y = Math.sin(t * 1.4 + z.i) * .03; m.fig.rotation.y = m.kijk * .35;
+      m.fig.position.y = Math.sin(t * 1.4 + z.i) * .03; m.fig.rotation.y = romp + (m.kijk - romp) * .25;
       if (!m.dicht) m.ogen.scale.y = (t + z.i * .7) % 4.6 < .13 && t ? .1 : 1;
       m.mond.scale.y = praat ? .035 + Math.abs(Math.sin(t * 13)) * .14 : .035;
       rnd.render(m.sc, cam); z.ctx.clearRect(0, 0, N, N); z.ctx.drawImage(rnd.domElement, 0, 0, N, N); }
