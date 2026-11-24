@@ -72,6 +72,8 @@
   .kop nav { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
   .knop { background: transparent; border: 1px solid var(--lijn-sterk); padding: 6px 13px; min-height: 34px; font: 600 .78rem/1.2 var(--sans); cursor: pointer; text-decoration: none; color: var(--inkt); display: inline-flex; align-items: center; gap: 6px; }
   .knop:hover { background: var(--gezet); }
+  .knop:active:not(:disabled) { transform: scale(.97); }
+  .knop { transition: background-color .15s, transform .1s; }
   .knop[aria-pressed="true"] { background: var(--inkt); color: var(--papier); }
   .knop[hidden] { display: none; }
   .knop.hoofd { background: var(--voorzitter); border-color: var(--voorzitter); color: var(--vel); }
@@ -125,7 +127,7 @@
   .munten { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
   .munten li { width: 26px; height: 26px; border-radius: 50%; border: 2px dashed color-mix(in srgb, var(--licht) 45%, transparent); }
   .munten li.vol { border: 2px solid var(--goud); background: var(--k); box-shadow: 0 2px 4px color-mix(in srgb, var(--zaal) 70%, transparent); }
-  .munten li.nu { border: 2px solid var(--goud); animation: adem 1.2s ease-in-out infinite; }
+  .munten li.nu { border: 2px solid var(--goud); animation: adem 1.2s ease-in-out 3; }
   .munten li.gespaard { opacity: .35; }
   :root.pitch .munten li { width: 34px; height: 34px; }
 
@@ -137,9 +139,28 @@
   :root.pitch .portret { width: 120px; height: 120px; } :root.pitch .zetel.koning .portret { width: 138px; height: 138px; }
   .zetel.gesproken .portret, .zetel.koning .portret { filter: none; }
   .zetel.spreekt .portret { transform: scale(1.14); filter: none; box-shadow: 0 0 0 6px color-mix(in srgb, var(--k) 45%, transparent), 0 10px 24px color-mix(in srgb, var(--zaal) 85%, transparent); }
-  .zetel.spreekt .mond { animation: praat .32s steps(2) infinite; transform-box: fill-box; transform-origin: center; }
+
   @keyframes praat { 50% { transform: scaleY(3.2); } }
   .zetel.afwezig { opacity: .35; }
+  .zetel .portret { position: relative; }
+  .zetel.ontvangt .portret::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; pointer-events: none; animation: ontvang .7s cubic-bezier(.16, 1, .3, 1) forwards; }
+  @keyframes ontvang { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--goud) 85%, transparent); } to { box-shadow: 0 0 0 26px transparent; } }
+  .spel.intro .zetel { animation: aanschuiven .6s cubic-bezier(.16, 1, .3, 1) both; animation-delay: calc(var(--i) * 60ms); }
+  @keyframes aanschuiven { from { opacity: 0; translate: 0 14px; } }
+  .vonk { position: absolute; z-index: 4; width: 22px; height: 22px; border-radius: 50%; pointer-events: none;
+    background: radial-gradient(circle, var(--licht) 0 25%, var(--goud) 45%, transparent 72%); }
+
+  .tafelkeuze { margin: 2px 0 0; font: 600 .85rem/1.35 var(--sans); color: var(--licht); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .tafelkeuze span { font: italic 400 .88rem/1.35 var(--serif); color: color-mix(in srgb, var(--licht) 85%, var(--vilt)); }
+  :root.pitch .tafelsub, :root.pitch .tafelkeuze, :root.pitch .tafelkeuze span { font-size: .88rem; }
+  .tafellink { pointer-events: auto; font: 700 .85rem/1 var(--sans); color: var(--zaal); background: var(--goud); padding: 9px 14px; text-decoration: none; }
+  .tafellink:hover { background: var(--licht); }
+  .tafellink[hidden], .tafelkeuze[hidden] { display: none; }
+  .munten li { display: grid; place-items: center; color: var(--licht); }
+  .munten li svg { width: 60%; height: 60%; }
+  .zetel.praat .mond { animation: praat .32s steps(2) infinite; transform-box: fill-box; transform-origin: center; }
+  .munten li.valt { animation: munt .5s cubic-bezier(.16, 1, .3, 1); }
+  @keyframes munt { from { transform: translateY(-26px) scale(1.5); opacity: 0; } 60% { opacity: 1; } }
   .naambord { font: 700 .8rem/1.2 var(--sans); color: var(--licht); background: color-mix(in srgb, var(--zaal) 70%, transparent); border: 1px solid var(--k); padding: 3px 9px; white-space: nowrap; }
   .zetel.koning .naambord { border-color: var(--goud); }
   :root.pitch .naambord { font-size: .88rem; font-weight: 700; }
@@ -148,10 +169,13 @@
   :root.pitch .teller { font-size: .9rem; }
 
   .bubbel { position: absolute; z-index: 3; width: min(420px, 86%); background: var(--licht); color: #1a1c1e; border: 3px solid var(--k); padding: 12px 16px 14px;
-    box-shadow: 0 14px 32px color-mix(in srgb, var(--zaal) 80%, transparent); font: 400 .95rem/1.45 var(--serif); opacity: 1; transform: translateY(0) scale(1);
-    transition: opacity .45s ease, transform .45s cubic-bezier(.16, 1, .3, 1); }
+    box-shadow: 0 14px 32px color-mix(in srgb, var(--zaal) 80%, transparent); font: 400 .95rem/1.45 var(--serif); opacity: 1; transform: none; }
   :root.pitch .bubbel { width: min(560px, 80%); font-size: inherit; }
-  .bubbel.weg { opacity: 0; transform: translateY(8px) scale(.97); pointer-events: none; }
+  .bubbel { transform-origin: var(--pijl, 50%) 0; }
+  .bubbel.boven { transform-origin: var(--pijl, 50%) 100%; }
+  .bubbel.komt { animation: ballon .38s cubic-bezier(.16, 1, .3, 1); }
+  @keyframes ballon { from { opacity: 0; transform: scale(.82); } }
+  .bubbel.weg { opacity: 0; transform: scale(.9); pointer-events: none; transition: opacity .24s ease-in, transform .24s ease-in; }
   .bubbel[hidden] { display: none; }
   .bubbel .wiekop { display: flex; justify-content: space-between; gap: 10px; font: 700 .72rem/1 var(--sans); letter-spacing: .07em; text-transform: uppercase; color: var(--k); margin-bottom: 6px; }
   .bubbel .wiekop span:last-child { color: #5f666b; letter-spacing: 0; text-transform: none; font-weight: 600; }
@@ -314,7 +338,7 @@
   .zeker .balk { height: 6px; background: var(--gezet); border: 1px solid var(--lijn); }
   .zeker .balk i { display: block; height: 100%; background: var(--griffie); }
   .bewijs { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font: 500 .75rem var(--sans); color: var(--stil); }
-  .bewijs .id { vertical-align: 0; font-size: .76rem; padding: 2px 7px; }
+  .bewijs .id { vertical-align: 0; font-size: .76rem; padding: 2px 7px; min-height: 26px; }
   .voorspelling { margin: 26px 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 22px; align-items: baseline; }
   .voorspelling .dag { font: 700 2.6rem/1 var(--serif); color: var(--voorzitter); font-variant-numeric: tabular-nums; }
   .voorspelling .dag small { display: block; font: 700 .72rem var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--zacht); margin-bottom: 6px; }
@@ -367,6 +391,9 @@
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
+    .zetel.spreekt .portret { transform: none; }
+    .zetel.ontvangt:not(.spreekt) .portret::after { box-shadow: 0 0 0 4px var(--goud); }
+    .bubbel.weg { opacity: 0; }
     #zitplan .woord.laatste { stroke-dashoffset: 0; }
   }
 </style>
@@ -424,7 +451,7 @@
   <div class="zaal">
     <div class="tafel" aria-hidden="true"></div>
     <svg class="sporen" id="sporen" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
-    <div class="tafelinfo" aria-hidden="true"><p class="tafeltitel" id="tafeltitel">Wacht op een zitting</p><ol class="munten" id="munten"></ol><p class="tafelsub" id="tafelsub">10 beurten voor de Raadsleden</p></div>
+    <div class="tafelinfo"><p class="tafeltitel" id="tafeltitel">Wacht op een zitting</p><ol class="munten" id="munten"></ol><p class="tafelsub" id="tafelsub">10 beurten voor de Raadsleden</p><p class="tafelkeuze" id="tafelkeuze" hidden></p><a class="tafellink" id="tafellink" href="#verdict" hidden>Lees het Verdict</a></div>
     <div id="zetels"></div>
     <div class="bubbel" id="bubbel" hidden aria-hidden="true"></div>
   </div>
@@ -694,7 +721,7 @@ function tekenZij() {
   const t = S.trace; if (!t) return;
   const l = liveToestand();
   const spreekt = l ? l.spreker : null;
-  const sleutel = [S.runId, S.n, t.status, spreekt, JSON.stringify(t.verbruik || {}), (t.geweigerde_ids || []).length].join("|");
+  const sleutel = [S.runId, S.n, t.status, spreekt, l?.aan, JSON.stringify(t.verbruik || {}), (t.geweigerde_ids || []).length].join("|");
   if (sleutel === S.zijSleutel) return;
   S.zijSleutel = sleutel;
   const a = analyse(t);
@@ -806,34 +833,78 @@ function tekenVerdict() {
 const PLAATS = { koning: [50, 18], archmage: [15, 34], engineer: [10, 64], guardian_keeper: [29, 82], historian: [71, 82], oracle: [90, 64], beast_master: [85, 34] };
 const SPEL = { sleutel: null, bubbelVan: null, weg: null, laatsteNr: 0 };
 function avatar(rol) { return `<svg viewBox="0 0 100 100" aria-hidden="true"><use href="#a-${PLAATS[rol] ? rol : "koning"}"/></svg>`; }
+const ZACHT = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+function bouwZetels() {
+  $("zetels").innerHTML = ["koning", ...ROLLEN].map((r, i) => { const [x, y] = PLAATS[r];
+    return `<div class="zetel${r === "koning" ? " koning" : ""}" data-rol="${r}" style="left:${x}%;top:${y}%;--k:${kleur(r)};--i:${i}"><div class="portret">${avatar(r)}</div><span class="naambord">${esc(naam(r))}</span><span class="teller"></span></div>`; }).join("");
+  if (!ZACHT()) { $("spel").classList.add("intro"); setTimeout(() => $("spel").classList.remove("intro"), 1200); }
+}
+function vonk(naar) {   // het hoofdmoment: de Koning geeft het woord, een gouden vonk vliegt naar de gekozen zetel
+  const zaal = $("spel").querySelector(".zaal"), w = zaal.clientWidth, h = zaal.clientHeight;
+  const [kx, ky] = PLAATS.koning, [x, y] = PLAATS[naar] || [50, 50];
+  const zetel = $("zetels").querySelector(`[data-rol="${naar}"]`);
+  const ontvang = () => { if (!zetel) return; zetel.classList.remove("ontvangt"); void zetel.offsetWidth; zetel.classList.add("ontvangt"); };
+  if (ZACHT()) return ontvang();
+  const v = document.createElement("i");
+  v.className = "vonk";
+  v.style.left = `${kx}%`; v.style.top = `${ky}%`;
+  zaal.appendChild(v);
+  const dx = (x - kx) / 100 * w, dy = (y - ky) / 100 * h;
+  const anim = v.animate([
+    { transform: "translate(-50%, -50%) scale(.4)", opacity: 0 },
+    { transform: "translate(-50%, -50%) scale(1.15)", opacity: 1, offset: .15 },
+    { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(.9)`, opacity: 1, offset: .9 },
+    { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(1.8)`, opacity: 0 }
+  ], { duration: 700, easing: "cubic-bezier(.45, 0, .2, 1)" });
+  setTimeout(ontvang, 600);
+  anim.onfinish = () => v.remove();
+}
 function tekenSpel(t, a, spreekt) {
   const leden = t.raadsleden || [];
-  const sl = [S.runId, S.n, t.status, spreekt, PITCH].join("|");
+  const lv = liveToestand(), liveAan = lv && lv.spreker === "koning" && lv.soort === "routering" ? lv.aan || null : null;
+  const sl = [S.runId, S.n, t.status, spreekt, PITCH, S.verdict?.run_id, liveAan].join("|");
   if (SPEL.sleutel === sl) return;
   SPEL.sleutel = sl;
-  const zetels = ["koning", ...ROLLEN].map(r => {
-    const [x, y] = PLAATS[r], n = a.tel[r]?.berichten || 0, k = r === "koning";
-    const cls = ["zetel", k ? "koning" : "", !k && !leden.includes(r) ? "afwezig" : "", n ? "gesproken" : "", spreekt === r ? "spreekt" : ""].join(" ");
-    return `<div class="${cls}" style="left:${x}%;top:${y}%;--k:${kleur(r)}"><div class="portret">${avatar(r)}</div><span class="naambord">${esc(naam(r))}</span>`
-      + (k ? `<span class="teller">${a.openRoutes.length} ${a.openRoutes.length === 1 ? "keuze" : "keuzes"}</span>` : `<span class="teller">${n ? `${n}× aan het woord` : "nog niet"}</span>`) + `</div>`;
-  }).join("");
-  $("zetels").innerHTML = zetels;
+  if (!$("zetels").children.length || SPEL.run !== S.runId) { bouwZetels(); SPEL.run = S.runId; SPEL.routes = a.openRoutes.length + (liveAan ? 1 : 0); SPEL.munten = a.raadslid; }
+  for (const el of $("zetels").children) {
+    const r = el.dataset.rol, n = a.tel[r]?.berichten || 0, k = r === "koning";
+    el.classList.toggle("afwezig", !k && !leden.includes(r));
+    el.classList.toggle("gesproken", n > 0);
+    el.classList.toggle("spreekt", spreekt === r);
+    el.querySelector(".teller").textContent = k ? `${a.openRoutes.length} ${a.openRoutes.length === 1 ? "keuze" : "keuzes"}` : n ? `${n}× aan het woord` : "nog niet";
+  }
   // Sporen: elke keuze van de Koning is een lijn van de troon naar die zetel; de laatste stroomt zolang de zitting loopt.
   const tel = {}; a.routes.forEach(r => tel[r] = (tel[r] || 0) + 1);
   const [kx, ky] = PLAATS.koning;
+  const doel = t.status === "klaar" ? null : liveAan || (spreekt !== "koning" ? a.laatsteRoute?.aan : null);
+  if (doel && !tel[doel]) tel[doel] = 0;
   $("sporen").innerHTML = Object.entries(tel).map(([r, n]) => { const [x, y] = PLAATS[r] || [50, 50];
-    const nu = t.status !== "klaar" && a.laatsteRoute?.aan === r;
+    const nu = r === doel;
     return `<line class="${nu ? "nu" : ""}" x1="${kx}" y1="${ky}" x2="${x}" y2="${y}" stroke-width="${nu ? 5 : 2 + n * 2}"/>`; }).join("");
-  // Munten: het beurtenbudget op tafel
+  // De vonk vliegt één keer per keuze: zodra de Koning ze uitspreekt, of anders wanneer ze in de trace staat
+  const keuzeNr = a.openRoutes.length + (liveAan ? 1 : 0);
+  if (keuzeNr > (SPEL.routes ?? 0)) { const naar = liveAan || a.openRoutes[a.openRoutes.length - 1]?.aan; if (naar) vonk(naar); SPEL.routes = keuzeNr; }
+  // Munten: het beurtenbudget op tafel; een net verdiende munt valt op het vilt
   const nuRol = spreekt && ROLLEN.includes(spreekt) ? spreekt : null;
+  if (a.raadslid > (SPEL.munten ?? a.raadslid)) SPEL.valt = { i: a.raadslid - 1, tot: Date.now() + 500 };
+  const nieuweMunt = SPEL.valt && Date.now() < SPEL.valt.tot ? SPEL.valt.i : -1;
+  SPEL.munten = a.raadslid;
   $("munten").innerHTML = Array.from({ length: BUDGET }, (_, i) => {
     const r = a.opeenvolging[i];
-    if (r) return `<li class="vol" style="--k:${kleur(r)}"></li>`;
+    if (r) return `<li class="vol${i === nieuweMunt ? " valt" : ""}" style="--k:${kleur(r)}" title="Beurt ${i + 1}: ${esc(naam(r))}">${sigil(r)}</li>`;
     if (i === a.raadslid && nuRol && t.status !== "klaar") return `<li class="nu"></li>`;
     return `<li class="${t.status === "klaar" ? "gespaard" : ""}"></li>`;
   }).join("");
-  $("tafeltitel").textContent = t.status === "klaar" ? (S.verdict && S.verdict.run_id === t.run_id ? "Zitting gesloten: het Verdict ligt op tafel" : "Zitting gesloten")
+  const titel = t.status === "klaar" ? (S.verdict && S.verdict.run_id === t.run_id ? "Zitting gesloten: het Verdict ligt op tafel" : "Zitting gesloten")
     : spreekt === "koning" ? "De Koning beslist" : spreekt ? `${naam(spreekt)} heeft het woord` : "De zitting loopt";
+  if ($("tafeltitel").textContent !== titel) {
+    $("tafeltitel").textContent = titel;
+    if (!ZACHT()) $("tafeltitel").animate([{ opacity: 0, transform: "translateY(6px)" }, { opacity: 1, transform: "none" }], { duration: 320, easing: "cubic-bezier(.16, 1, .3, 1)" });
+  }
+  const lk = a.openRoutes[a.openRoutes.length - 1];
+  $("tafelkeuze").hidden = !lk;
+  if (lk) $("tafelkeuze").innerHTML = lk.aan ? `Laatste keuze: het woord aan ${esc(lidw(lk.aan))}. <span>Waarom: ${esc(lk.reden)}</span>` : `De Koning sloot het debat. <span>Waarom: ${esc(lk.reden)}</span>`;
+  $("tafellink").hidden = !(t.status === "klaar" && S.verdict && S.verdict.run_id === t.run_id);
   $("tafelsub").textContent = t.status === "klaar" ? (a.raadslid < BUDGET ? `${BUDGET - a.raadslid} beurten gespaard` : "Het volledige budget is gebruikt") : `Beurt ${Math.min(a.raadslid + (nuRol ? 1 : 0), BUDGET)} van ${BUDGET}`;
 }
 
@@ -842,26 +913,33 @@ function zetBubbel(rol, html, live) {
   clearTimeout(SPEL.weg);
   const [x, y] = PLAATS[rol] || [50, 50];
   const onder = y < 50;   // zetel bovenaan: ballon eronder, anders erboven
-  b.className = `bubbel ${onder ? "onder" : "boven"}${live ? " live" : ""}`;
+  b.className = `bubbel ${onder ? "onder" : "boven"}${live ? " live" : ""}${b.classList.contains("komt") ? " komt" : ""}`;
   b.style.setProperty("--k", kleur(rol));
   const breed = b.offsetParent ? b.offsetParent.clientWidth : 1000;
   const bw = Math.min(PITCH ? 560 : 420, breed * (PITCH ? .8 : .86));
   const links = Math.max(12, Math.min(breed - bw - 12, breed * x / 100 - bw / 2));
   b.style.left = `${links}px`;
   b.style.setProperty("--pijl", `${Math.max(24, Math.min(bw - 24, breed * x / 100 - links))}px`);
-  const marge = PITCH ? 84 : 66;
+  const marge = PITCH ? 104 : 84;
   if (onder) { b.style.top = `calc(${y}% + ${marge}px)`; b.style.bottom = ""; }
   else { b.style.bottom = `calc(${100 - y}% + ${marge}px)`; b.style.top = ""; }
   b.innerHTML = html;
+  const nieuw = b.hidden || SPEL.bubbelVan !== rol || b.classList.contains("weg");
   b.hidden = false;
+  if (nieuw) { b.classList.remove("komt"); void b.offsetWidth; b.classList.add("komt"); }
   SPEL.bubbelVan = rol;
 }
 function verbergBubbel(na) {
   clearTimeout(SPEL.weg);
-  SPEL.weg = setTimeout(() => { $("bubbel").classList.add("weg"); SPEL.weg = setTimeout(() => { $("bubbel").hidden = true; SPEL.bubbelVan = null; }, 500); }, na);
+  SPEL.weg = setTimeout(() => { $("bubbel").classList.add("weg"); SPEL.weg = setTimeout(() => { $("bubbel").hidden = true; SPEL.bubbelVan = null; SPEL.weg = null; }, 280); }, na);
 }
 const staart = tekst => { const t = String(tekst || ""); return t.length > 520 ? "… " + t.slice(-520).replace(/^\S*\s/, "") : t; };
+function praat(rol) {   // de mond beweegt alleen terwijl er echt tekst binnenkomt
+  const z = $("zetels").querySelector(`[data-rol="${rol}"]`); if (!z) return;
+  z.classList.add("praat"); clearTimeout(z._stil); z._stil = setTimeout(() => z.classList.remove("praat"), 450);
+}
 function bubbelLive(l) {
+  if (l.tekst || l.vraag) praat(l.spreker);
   if (l.spreker === "koning") {
     if (l.soort === "verdict") return zetBubbel("koning", `<div class="wiekop"><span>De Koning</span><span>schrijft het Verdict</span></div><div class="lijf"><p>${l.tekst ? inline(staart(l.tekst)) : "stelt het Verdict op"}</p></div>`, true);
     return zetBubbel("koning", `<div class="wiekop"><span>De Koning</span><span>${l.aan ? `het woord aan ${esc(lidw(l.aan))}` : "overweegt wie nu spreekt"}</span></div>`
