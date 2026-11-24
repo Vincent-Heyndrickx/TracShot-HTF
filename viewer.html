@@ -275,6 +275,10 @@
   .zetel::after { content: ""; position: absolute; left: 50%; bottom: -20px; width: 150px; height: 22px; translate: -50% 0; z-index: -1; pointer-events: none; background: radial-gradient(closest-side, rgb(0 0 0 / .7), transparent); }
   .zetel.spreekt .portret { box-shadow: 0 0 0 2px var(--zaal), 0 0 0 5px var(--goud), 0 0 44px 8px color-mix(in srgb, var(--k) 70%, transparent), 0 18px 30px rgb(0 0 0 / .8); }
 
+  /* ---------- 3D-portretten (three.js); zonder WebGL of netwerk blijft het getekende portret staan ---------- */
+  .portret canvas { width: 100%; height: 100%; display: block; border-radius: 50%; background: radial-gradient(circle at 34% 24%, color-mix(in srgb, var(--k) 58%, #1a1c1e), color-mix(in srgb, var(--k) 22%, #05070b) 78%); }
+  .portret.d3 svg { display: none; }
+
   /* ---------- volledig scherm: alleen de zaal, om het debat te volgen ---------- */
   .vol-uit { display: none; position: absolute; z-index: 5; top: 16px; right: 18px; font: 700 .85rem/1 var(--sans); color: var(--licht); background: rgb(5 8 14 / .6); border: 1px solid color-mix(in srgb, var(--licht) 45%, transparent); padding: 9px 14px; cursor: pointer; }
   .vol-uit:hover, .vol-uit:focus-visible { background: var(--licht); color: var(--zaal); }
@@ -935,6 +939,7 @@ const ZACHT = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 function bouwZetels() {
   $("zetels").innerHTML = ["koning", ...ROLLEN].map((r, i) => { const [x, y] = PLAATS[r];
     return `<div class="zetel${r === "koning" ? " koning" : ""}" data-rol="${r}" style="left:${x}%;top:${y}%;--k:${kleur(r)};--i:${i}"><div class="portret">${avatar(r)}</div><span class="naambord">${esc(naam(r))}</span><span class="teller"></span></div>`; }).join("");
+  if (window.av3d) window.av3d();
   if (!ZACHT()) { $("spel").classList.add("intro"); setTimeout(() => $("spel").classList.remove("intro"), 1200); }
 }
 function vonk(naar) {   // het hoofdmoment: de Koning geeft het woord, een gouden vonk vliegt naar de gekozen zetel
@@ -1101,6 +1106,87 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && focusId) s
 /* ---------- beamer, live volgen, vastgelopen run ---------- */
 $("spel").addEventListener("pointermove", e => { if (ZACHT()) return; const k = e.currentTarget.getBoundingClientRect(), h = $("hal");
   h.style.setProperty("--px", ((e.clientX - k.left) / k.width * 2 - 1).toFixed(3)); h.style.setProperty("--py", ((e.clientY - k.top) / k.height * 2 - 1).toFixed(3)); });
+/* ---------- 3D-portretten: lage-poly bustes die ademen, knipperen, praten en naar de spreker kijken ---------- */
+function start3d() {
+  if (!window.THREE) return;
+  let rnd; try { rnd = new THREE.WebGLRenderer({ alpha: true, antialias: true }); } catch (e) { return; }
+  const N = 240, PI = Math.PI; rnd.setPixelRatio(1); rnd.setSize(N, N, false);
+  const cam = new THREE.PerspectiveCamera(30, 1, .1, 50); cam.position.set(0, .3, 6.6); cam.lookAt(0, .1, 0);
+  const G = { bol: new THREE.SphereGeometry(1, 32, 22), cil: new THREE.CylinderGeometry(1, 1, 1, 28), kegel: new THREE.ConeGeometry(1, 1, 24), ring: new THREE.TorusGeometry(1, .14, 12, 32),
+    blok: new THREE.BoxGeometry(1, 1, 1), half: new THREE.SphereGeometry(1, 32, 16, 0, PI * 2, 0, PI / 2) };
+  const mats = {}, M = c => mats[c] || (mats[c] = new THREE.MeshStandardMaterial({ color: c, roughness: .6 }));
+  const GOUD = new THREE.MeshStandardMaterial({ color: 0xe3b23c, roughness: .35, metalness: .3 }), STAAL = new THREE.MeshStandardMaterial({ color: 0xb4bfcd, roughness: .38, metalness: .2 });
+  const d = (g, c, pos, s, ouder, rot) => { const x = new THREE.Mesh(G[g], typeof c === "number" ? M(c) : c); x.position.set(...pos);
+    Array.isArray(s) ? x.scale.set(...s) : x.scale.setScalar(s); if (rot) x.rotation.set(...rot); ouder.add(x); return x; };
+  const R = { koning: [0xe6b98f, 0x9c211b, 0x73391a, 0xef7d72], archmage: [0xecc9a6, 0x5b3fa8, 0xf1f1f4, 0xb79cf0], engineer: [0xa9744d, 0x1d7f71, 0x2b1d14, 0x5fcbb8],
+    guardian_keeper: [0xd9a77e, 0x2f5fc0, 0x5a3a22, 0x86aef0], historian: [0xf0cfae, 0x85552a, 0xa8a49c, 0xd9a679], oracle: [0x8a5a3c, 0xa3265c, 0x1f1210, 0xef8cb6], beast_master: [0xc8956a, 0x4a7a2a, 0x3a2414, 0x9ccf76] };
+  function bouw(rol) {
+    const [huid, stof, wenk, rand] = R[rol], sc = new THREE.Scene(), fig = new THREE.Group(), kop = new THREE.Group(), ogen = new THREE.Group();
+    sc.add(new THREE.HemisphereLight(0xdfe6ff, 0x3a2416, .62));
+    const zon = new THREE.DirectionalLight(0xfff0d8, .7); zon.position.set(-2.5, 3, 4); sc.add(zon);
+    const tegen = new THREE.DirectionalLight(rand, .75); tegen.position.set(3, 1.5, -3); sc.add(tegen);
+    sc.add(fig); fig.add(kop); kop.position.set(0, .25, 0); kop.add(ogen);
+    d("bol", stof, [0, -1.8, 0], [1.4, .98, .86], fig); d("cil", huid, [0, -.72, 0], [.3, .5, .3], fig);
+    d("bol", huid, [0, 0, 0], [.8, .9, .8], kop); d("bol", huid, [-.8, 0, 0], .14, kop); d("bol", huid, [.8, 0, 0], .14, kop);
+    const dicht = rol === "oracle";
+    for (const k of [-1, 1]) { d("bol", 0x1a1210, [k * .3, .08, .72], [.09, dicht ? .02 : .12, .06], ogen); if (!dicht) d("bol", 0xffffff, [k * .27, .13, .775], .028, ogen);
+      d("blok", wenk, [k * .3, .31, .74], [.25, .055, .05], kop, [0, 0, -k * .13]); }
+    d("bol", huid, [0, -.12, .8], [.09, .12, .1], kop);
+    const baard = rol === "koning" || rol === "archmage", mond = d("bol", 0x3a1210, [0, -.42, baard ? .9 : .73], [.17, .035, .06], kop);
+    if (rol === "koning") {
+      d("half", 0x8a4b22, [0, .12, -.06], [.86, .97, .88], kop, [-.5, 0, 0]); d("bol", 0x8a4b22, [0, -.5, .12], [.76, .6, .72], kop);
+      d("cil", GOUD, [0, .84, 0], [.62, .22, .62], kop); for (let i = 0; i < 7; i++) { const a = i / 7 * PI * 2; d("kegel", GOUD, [Math.sin(a) * .56, 1.08, Math.cos(a) * .56], [.12, .32, .12], kop); }
+      d("bol", 0xc8423a, [0, .84, .62], .075, kop); d("ring", 0xf4efe2, [0, -1.0, 0], [.72, .72, 1.5], fig, [PI / 2, 0, 0]); d("bol", GOUD, [0, -1.25, .82], .13, fig);
+    } else if (rol === "archmage") {
+      d("half", 0xe4e4ec, [0, .1, -.06], [.86, .96, .88], kop, [-.5, 0, 0]); d("bol", 0xf1f1f4, [0, -.42, .2], [.78, .46, .66], kop); d("kegel", 0xf1f1f4, [0, -1.15, .4], [.58, 1.7, .48], kop, [PI, 0, 0]);
+      d("cil", 0x4a2f99, [0, .62, 0], [1.2, .07, 1.2], kop); d("kegel", 0x6a46d0, [0, 1.42, 0], [.72, 1.6, .72], kop, [0, 0, -.08]); d("ring", GOUD, [0, .72, 0], [.68, .68, .7], kop, [PI / 2, 0, 0]);
+    } else if (rol === "engineer") {
+      d("half", 0x2b1d14, [0, .12, -.06], [.86, .97, .88], kop, [-.5, 0, 0]); d("ring", 0x3a3f45, [0, .44, 0], [.82, .82, .6], kop, [PI / 2, 0, 0]);
+      for (const k of [-1, 1]) { d("ring", GOUD, [k * .3, .5, .72], .16, kop, [-.3, 0, 0]); d("bol", 0x8fe3d6, [k * .3, .5, .72], [.14, .14, .05], kop, [-.3, 0, 0]); }
+      d("blok", 0x6b4428, [0, -1.75, .62], [.95, 1.1, .3], fig); d("ring", GOUD, [0, -1.45, .8], .13, fig);
+    } else if (rol === "guardian_keeper") {
+      d("half", STAAL, [0, .06, -.02], [.9, .98, .9], kop); d("blok", STAAL, [0, .12, .82], [.09, .52, .08], kop); d("bol", 0xc8423a, [0, 1.12, -.12], [.12, .42, .5], kop);
+      for (const k of [-1, 1]) d("blok", STAAL, [k * .78, -.18, .12], [.1, .6, .5], kop);
+      d("ring", STAAL, [0, -.98, 0], [.62, .62, 1.7], fig, [PI / 2, 0, 0]); d("bol", 0xeef2f8, [0, -1.5, .8], [.2, .26, .08], fig);
+    } else if (rol === "historian") {
+      d("half", 0xdedbd5, [0, .12, -.06], [.87, .97, .88], kop, [-.5, 0, 0]); d("bol", 0xcfccc6, [0, 1.0, -.22], .33, kop);
+      for (const k of [-1, 1]) d("ring", 0x4a3624, [k * .3, .08, .8], [.2, .2, .12], kop); d("blok", 0x4a3624, [0, .1, .8], [.14, .035, .03], kop);
+      d("ring", 0xf2e3c0, [0, -1.0, 0], [.7, .7, 1.5], fig, [PI / 2, 0, 0]); d("kegel", 0xf4efe2, [.86, .6, -.1], [.09, .9, .2], kop, [0, 0, -.5]);
+    } else if (rol === "oracle") {
+      d("bol", 0xc43a78, [0, .06, -.2], [1.0, 1.08, .8], kop); d("bol", 0xc43a78, [0, -1.6, -.12], [1.5, 1.1, .92], fig); d("half", 0x1f1210, [0, .12, -.04], [.84, .96, .84], kop, [-.5, 0, 0]);
+      d("bol", 0x8fe3d6, [0, .52, .7], .08, kop); d("ring", GOUD, [0, .52, .7], .11, kop); d("ring", GOUD, [0, -1.02, .1], [.5, .5, .8], fig, [PI / 2.4, 0, 0]);
+    } else {
+      d("half", 0x5a3a22, [0, .12, -.06], [.87, .98, .88], kop, [-.5, 0, 0]);
+      for (let i = 0; i < 11; i++) { const a = (i / 10 - .5) * PI * 1.25, y = .55 + Math.cos(a) * .35; d("kegel", 0x5a3a22, [Math.sin(a) * .85, y, -.1], [.2, .62, .2], kop, [0, 0, -a]); }
+      for (const k of [-1, 1]) for (const y of [-.16, -.27]) d("blok", 0xe8f0d8, [k * .5, y, .63], [.2, .04, .04], kop, [0, k * .6, -k * .25]);
+      d("ring", 0x7d6a55, [0, -1.0, 0], [.76, .76, 2.2], fig, [PI / 2, 0, 0]); for (const k of [-1, 0, 1]) d("kegel", 0xf4efe2, [k * .17, -1.42, .82], [.05, .2, .05], fig, [PI, 0, 0]);
+    }
+    return { sc, fig, kop, ogen, mond, dicht, kijk: 0 };
+  }
+  const modellen = {}; let zetels = [];
+  window.av3d = () => {
+    zetels = [...$("zetels").children].map((el, i) => { const rol = el.dataset.rol, pt = el.querySelector(".portret"); if (!R[rol]) return null;
+      const c = document.createElement("canvas"); c.width = c.height = N; pt.prepend(c); pt.classList.add("d3");
+      return { el, i, rol, x: PLAATS[rol][0], ctx: c.getContext("2d"), m: modellen[rol] || (modellen[rol] = bouw(rol)) }; }).filter(Boolean);
+  };
+  let vorig = 0;
+  function tik(ms) {
+    requestAnimationFrame(tik);
+    if (document.hidden || !zetels.length || !zetels[0].el.isConnected || ms - vorig < (ZACHT() ? 500 : 30)) return;
+    vorig = ms; const t = ZACHT() ? 0 : ms / 1000, spreker = zetels.find(z => z.el.classList.contains("spreekt"));
+    for (const z of zetels) { const m = z.m, praat = z.el.classList.contains("praat"), zelf = spreker === z;
+      const doel = spreker && !zelf ? Math.max(-.7, Math.min(.7, (spreker.x - z.x) / 55)) : Math.sin(t * .5 + z.i * 1.7) * .14;
+      m.kijk += (doel - m.kijk) * .08; m.kop.rotation.y = m.kijk;
+      m.kop.rotation.x = Math.sin(t * .9 + z.i) * .035 + (praat ? Math.sin(t * 9) * .05 : 0); m.kop.rotation.z = Math.sin(t * .6 + z.i * 2) * .025;
+      m.fig.position.y = Math.sin(t * 1.4 + z.i) * .03; m.fig.rotation.y = m.kijk * .35;
+      if (!m.dicht) m.ogen.scale.y = (t + z.i * .7) % 4.6 < .13 && t ? .1 : 1;
+      m.mond.scale.y = praat ? .035 + Math.abs(Math.sin(t * 13)) * .14 : .035;
+      rnd.render(m.sc, cam); z.ctx.clearRect(0, 0, N, N); z.ctx.drawImage(rnd.domElement, 0, 0, N, N); }
+  }
+  if ($("zetels").children.length) window.av3d();
+  requestAnimationFrame(tik);
+}
+{ const s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"; s.onload = () => { try { start3d(); } catch (e) { console.warn("3D-portretten uit:", e); } }; document.head.appendChild(s); }
 function zetVol() { const s = $("spel"); if (document.fullscreenElement) document.exitFullscreen(); else if (s.requestFullscreen) s.requestFullscreen().catch(() => {}); }
 $("vol").addEventListener("click", zetVol); $("vol-uit").addEventListener("click", zetVol);
 if (!document.fullscreenEnabled) $("vol").hidden = true;
