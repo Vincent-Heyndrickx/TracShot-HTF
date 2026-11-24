@@ -583,9 +583,13 @@ async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4, rol=No
     """Eén Raadslid-beurt met toolloop in Python. Geeft (tekst, [(tool, argumenten)], gezien_ids) terug.
     bij_tool(tool, argumenten) wordt meteen na elke toolcall opgeroepen (zodat de trace live meegroeit)."""
     namen = {t.name for t in tools}
-    berichten = [{"role": "system", "content": systeem + toolprotocol(tools, max_calls)},
-                 {"role": "user", "content": prompt}]
-    calls, gezien, tekst = [], set(), ""
+    # Toolprotocol in het user-bericht: een OpenClaw-agent kan zijn eigen systeemprompt gebruiken (bevinding OAuth-proef).
+    eerst_lezen = ('Begin met een JSON-verzoek aan je eigen MCP-bron. '
+                   'Schrijf nog geen debatantwoord. Geef alleen de exacte toolnaam en de argumenten.')
+    berichten = [{"role": "system", "content": systeem},
+                 {"role": "user", "content": prompt + toolprotocol(tools, max_calls) + "\n\n" + eerst_lezen}]
+    calls, gezien = [], set()
+    bron_gelezen = False
 
     def toon(t):  # live.json: het antwoord dat het Raadslid aan het schrijven is
         antwoord = veld_deel(t, "antwoord")
@@ -593,7 +597,7 @@ async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4, rol=No
             live(spreker=rol, soort="bericht", stap="schrijft", tekst=antwoord)
         elif '"tool"' in t:
             live(spreker=rol, soort="bericht", stap="zoekt")
-        elif calls and not t.lstrip().startswith("{"):
+        elif bron_gelezen and not t.lstrip().startswith("{"):
             live(spreker=rol, soort="bericht", stap="schrijft", tekst=t)
 
     for _ in range(max_calls + 3):
@@ -601,22 +605,30 @@ async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4, rol=No
         data = parse_json(tekst) or {}
         berichten.append({"role": "assistant", "content": tekst})
         tool = data.get("tool")
-        if tool in namen and len(calls) < max_calls:
+        if isinstance(tool, str) and tool in namen and len(calls) < max_calls:
             args = data.get("argumenten") if isinstance(data.get("argumenten"), dict) else {}
-            try:
-                res = await sessie.call_tool(tool, args)
-                uit = "\n".join(getattr(c, "text", "") or "" for c in res.content) or "(leeg resultaat)"
-            except Exception as e:
-                uit = f"Toolfout: {e}"
             calls.append((tool, args))
-            gezien.update(ids_in(uit))
             live(forceer=True, spreker=rol, soort="bericht", stap="bron", tool=tool)
             if bij_tool:
                 bij_tool(tool, args)
+            try:
+                res = await sessie.call_tool(tool, args)
+                if res.isError:
+                    uit = "De MCP-tool gaf een fout. Controleer de argumenten of gebruik een andere tool."
+                else:
+                    uit = "\n".join(getattr(c, "text", "") or "" for c in res.content)
+                    if not uit and res.structuredContent is not None:
+                        uit = json.dumps(res.structuredContent, ensure_ascii=False)
+                    bron_gelezen = True
+                    gezien.update(ids_in(uit[:15000]))
+            except Exception:
+                uit = "De MCP-aanroep is mislukt. Probeer een passend JSON-verzoek zolang het toolbudget dat toelaat."
             berichten.append({"role": "user", "content": f"Resultaat van {tool}:\n{uit[:15000]}\n\nVolgende stap (alleen JSON)."})
             continue
-        if not calls:
-            berichten.append({"role": "user", "content": 'Raadpleeg eerst je Kennisbron. Antwoord met {"tool": "...", "argumenten": {...}}.'})
+        if not bron_gelezen:
+            if len(calls) >= max_calls:
+                break
+            berichten.append({"role": "user", "content": eerst_lezen})
             continue
         antwoord = data.get("antwoord")
         if isinstance(antwoord, str) and antwoord.strip():
@@ -625,9 +637,11 @@ async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4, rol=No
             berichten.append({"role": "user", "content": 'Geen toolcalls meer. Geef nu je antwoord als {"antwoord": "..."}.'})
             continue
         if tekst and not tekst.lstrip().startswith("{"):
-            return tekst, calls, gezien  # gewoon tekst na minstens één toolcall: aanvaarden als antwoord
+            return tekst, calls, gezien  # gewoon tekst na minstens één geslaagde toolcall: aanvaarden als antwoord
         berichten.append({"role": "user", "content": 'Onleesbaar. Antwoord met {"tool": ...} of {"antwoord": "..."}.'})
-    return tekst or "(geen antwoord)", calls, gezien
+    if not bron_gelezen:
+        raise RuntimeError("Raadslid-beurt afgebroken: geen geslaagde MCP-aanroep.")
+    raise RuntimeError("Raadslid-beurt afgebroken: geen bruikbaar debatantwoord.")
 
 
 async def run():
