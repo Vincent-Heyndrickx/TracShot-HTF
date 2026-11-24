@@ -1,11 +1,17 @@
-"""Council of Achrona: een mini-Council met Raadsleden en een Koning.
+"""Council of Achrona: een Council met Raadsleden en een Koning (orchestrator).
 
 Start met `uv run council`. Schrijft verdict.json en trace.json in de root van de repo.
-De Koning leidt het debat in `kies_volgende()`: hij beslist wie spreekt, met welke vraag en waarom.
+
+De Koning is een agent (MODEL_GROOT) zonder Kennisbron:
+  - `kies_volgende()` leest het debat en kiest elke beurt wie spreekt, met welke vraag en waarom,
+    houdt `open_vragen` bij en stopt zelf als de Council genoeg weet;
+  - `schrijf_verdict()` stelt aan het einde het Verdict en de geschillen op, alleen uit het debat.
+Code bevat geen inhoud uit de Kennisbronnen: alleen regels over vorm (ID-patroon, prefix per Rol).
 """
 import asyncio
 import json
 import os
+import re
 import sys
 import uuid
 from contextlib import AsyncExitStack
@@ -15,50 +21,308 @@ from pathlib import Path
 from agent_framework import Agent, MCPStreamableHTTPTool
 from agent_framework.openai import OpenAIChatCompletionClient
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 
 import raadsleden
 
 ROOT = Path(__file__).parent
 KENNISBRONNEN = ROOT / "kennisbronnen"
 ROLLEN = ("archmage", "engineer", "guardian_keeper", "historian", "oracle", "beast_master")
+PREFIX = {"archmage": "ARC", "engineer": "ENG", "guardian_keeper": "GUA", "historian": "HIS", "oracle": "ORA", "beast_master": "BEA"}
 BEURTENBUDGET = 10  # spelregel: maximaal 10 Raadslid-beurten (berichten van Raadsleden) per run
+MIN_BEURTEN_VOOR_STOP = 4  # de Koning mag niet stoppen voor er een minimum aan kennis op tafel ligt
+SLOTS = ("ingreep", "mechanisme", "verloop")
+
+# Herkent ook ID's met een rare streep (U+2011 enz.); we normaliseren ze naar een gewoon '-'.
+ID_RE = re.compile(r"\b(ARC|ENG|GUA|HIS|ORA|BEA)[-‐‑‒–—―−]([0-9]{3})\b")
+
+# Gedeelde staat tussen de async debat-loop en de (sync) Koning.
+STAAT = {"verbruik": None, "gezien": {}, "open_vragen": []}
+
+
+def ids_in(tekst):
+    return [f"{a}-{b}" for a, b in ID_RE.findall(tekst or "")]
+
+
+def normaliseer(tekst):
+    return ID_RE.sub(lambda m: f"{m.group(1)}-{m.group(2)}", tekst or "")
+
+
+# ---------------------------------------------------------------- de Koning als agent (sync)
+
+_koning_client = None
+
+
+def koning_json(systeem, gebruiker, max_tokens=2000):
+    """Synchrone chat-call naar MODEL_GROOT die een JSON-object teruggeeft (of None)."""
+    global _koning_client
+    if _koning_client is None:
+        _koning_client = OpenAI(base_url=os.environ["OPENAI_BASE_URL"], api_key=os.environ["OPENAI_API_KEY"], max_retries=8)
+    kw = {"model": os.environ["MODEL_GROOT"], "max_tokens": max_tokens,
+          "messages": [{"role": "system", "content": systeem}, {"role": "user", "content": gebruiker}]}
+    if os.getenv("REASONING"):
+        kw["reasoning_effort"] = os.environ["REASONING"]
+    for poging in range(3):
+        try:
+            if poging == 0:
+                r = _koning_client.chat.completions.create(response_format={"type": "json_object"}, **kw)
+            else:  # niet elk model kent JSON mode: dan zonder, en robuust parsen
+                r = _koning_client.chat.completions.create(**kw)
+        except Exception as e:
+            print(f"[Koning] LLM-fout (poging {poging + 1}): {e}")
+            continue
+        if STAAT["verbruik"] is not None and r.usage:
+            v = STAAT["verbruik"].setdefault("groot", {"beurten": 0, "invoer": 0, "gecached": 0, "uitvoer": 0})
+            v["beurten"] += 1
+            v["invoer"] += r.usage.prompt_tokens or 0
+            details = getattr(r.usage, "prompt_tokens_details", None)
+            v["gecached"] += (getattr(details, "cached_tokens", 0) or 0) if details else 0
+            v["uitvoer"] += r.usage.completion_tokens or 0
+        data = parse_json((r.choices[0].message.content or "") if r.choices else "")
+        if isinstance(data, dict):
+            return data
+        print(f"[Koning] onleesbare JSON (poging {poging + 1})")
+    return None
+
+
+def parse_json(tekst):
+    tekst = re.sub(r"<think>.*?</think>", "", tekst, flags=re.S)
+    a, b = tekst.find("{"), tekst.rfind("}")
+    if a < 0 or b <= a:
+        return None
+    try:
+        return json.loads(tekst[a:b + 1])
+    except json.JSONDecodeError:
+        return None
+
+
+def debat_tekst(beurten, leden, met_toolcalls=True):
+    """Het debat zoals de Koning het ziet: vragen van de Koning, berichten en welke tools iemand gebruikte."""
+    namen = {l.ROL: l.NAAM for l in leden}
+    regels = []
+    for b in beurten:
+        if b["soort"] == "routering" and b.get("aan"):
+            regels.append(f"[Koning → {namen.get(b['aan'], b['aan'])}] {b.get('vraag')}")
+        elif b["soort"] == "toolcall" and met_toolcalls:
+            regels.append(f"  ({namen.get(b['spreker'], b['spreker'])} raadpleegde zijn Kennisbron: {b['tool']})")
+        elif b["soort"] == "bericht" and b["spreker"] in namen:
+            regels.append(f"{namen[b['spreker']]} ({b['spreker']}): {normaliseer(b['tekst'])}")
+    return "\n\n".join(regels) or "(het debat is nog niet begonnen)"
+
+
+def ledenlijst(beurten, leden):
+    regels = []
+    for l in leden:
+        n = sum(1 for b in beurten if b["soort"] == "bericht" and b["spreker"] == l.ROL)
+        regels.append(f"- {l.ROL} ({l.NAAM}, ID-prefix {PREFIX[l.ROL]}-): {l.PERSPECTIEF} "
+                      f"Publiek Belang: {getattr(l, 'BELANG', 'onbekend')}. Sprak al {n}x.")
+    return "\n".join(regels)
+
+
+KONING_ROUTERING = """Je bent de Koning van de Council of Achrona. Je leidt een debat tussen Raadsleden over de oorzaak van de Desync.
+Je hebt zelf GEEN Kennisbron: je weet alleen wat de Raadsleden in dit debat zeiden. Verzin nooit feiten of ID's.
+
+Het doel van het debat is een Council Verdict:
+- oorzaak in drie delen: ingreep (wie deed wat, wanneer), mechanisme (hoe leidt dat tot de symptomen), verloop (wat toont het patroon in de tijd);
+- een geordend herstelplan, risico's met mitigatie, en een voorspelling: op welke dag slaat de Desync opnieuw toe als niemand ingrijpt?
+Alles moet onderbouwd zijn met record-ID's. Een Raadslid kan alleen ID's met zijn eigen prefix bewijzen.
+
+Hoe je leidt:
+- Elke beurt kies je precies één Raadslid en stel je een korte, gerichte vraag (geen open "geef je inbreng").
+- Er zijn hoogstens 10 Raadslid-beurten. Verspil er geen: vraag nooit om te herhalen of samen te vatten.
+- Elk Raadslid heeft een publiek Belang en kan ernaast zitten. Een bewering die het eigen Belang dient, of die een ander Raadslid beschuldigt, laat je toetsen door een Raadslid wiens bron het kan bevestigen of weerleggen.
+- Verwijst een Raadslid naar een andere Rol, of noemt iemand een gebeurtenis die een andere Rol in zijn bron moet hebben: dat is een sterke reden om die Rol aan het woord te laten.
+- Spreken twee Raadsleden elkaar tegen: confronteer de ene met de bewering van de andere en vraag om ID's.
+- Een Rol die nog niet sprak kan net het ontbrekende stuk hebben; laat ze alleen links liggen als je goede reden hebt.
+- Vraag waar nuttig naar dagen/tijdstippen: die zijn nodig voor verloop en voorspelling.
+- Houd open_vragen bij: wat moet de Council nog weten? Werk de lijst elke beurt bij (opgeloste vragen eruit).
+- Stop (rol = null) zodra ingreep, mechanisme en verloop elk door bewijs gedragen zijn en de belangrijkste tegenspraak beslecht is, of als geen enkele Rol nog iets nieuws kan toevoegen. Stoppen vóór het budget op is, is goed leiderschap.
+
+Antwoord ALLEEN met een JSON-object:
+{"rol": "<rol uit de lijst of null>", "vraag": "<de vraag aan die Rol, of null>", "reden": "<concreet waarom deze Rol en deze vraag nu, verwijs naar wat er gezegd is>", "open_vragen": ["..."]}"""
 
 
 def kies_volgende(beurten, leden):
     """De Koning leidt het debat: hij beslist wie spreekt. De kit roept deze functie op vóór elke beurt.
-    (In AI-termen heet dit deel een orchestrator.)
 
-    Je krijgt:
-      beurten  het debat tot nu toe, dezelfde lijst als in trace.json. Een bericht van een
-               Raadslid ziet er zo uit: {"soort": "bericht", "spreker": "engineer", "tekst": "..."}
-      leden    de Raadsleden uit raadsleden/, elk met .ROL, .NAAM en .PERSPECTIEF
-
-    Je geeft terug:
-      (rol, vraag, reden)   wie nu spreekt, welke vraag die krijgt en waarom je hem kiest
-      (None, None, reden)   het debat stopt, met de reden waarom
-    De reden komt in de trace en in de viewer. De jury leest ze: maak ze concreet.
-
-    TODO voor jullie team:
-    Nu praat iedereen om de beurt, in een vaste volgorde, ook als dat niets toevoegt. Er zijn maar
-    10 Raadslid-beurten, dus zo verspil je beurten. Laat de Koning in deze functie naar het debat
-    kijken en elke beurt bewust kiezen. Vragen om mee te starten:
-      - Wie heeft nog niet gesproken, en wiens kennis ontbreekt nog?
-      - Iemand verwijst naar een andere Rol of doet een bewering: wie kan dat controleren?
-      - Welke delen van de oorzaak (ingreep, mechanisme, verloop) zijn nog onbekend?
-      - Weet de Council genoeg? Stop dan zelf, vóór het budget op is.
-    Twee manieren (of een mix):
-      - regels in code, bv. "wie genoemd wordt, moet het toetsen";
-      - een agent: de Koning als LLM die het debat leest en (rol, vraag, reden) teruggeeft.
-        Meestal sneller gebouwd en slimmer dan regels: zie "Regels of een agent?" in de README.
+    Geeft (rol, vraag, reden, open_vragen) terug, of (None, None, reden, open_vragen) om te stoppen.
     """
-    rondes = int(os.getenv("RONDES", "2"))
-    gesproken = sum(1 for b in beurten if b["soort"] == "bericht" and b["spreker"] in ROLLEN)
-    if gesproken >= rondes * len(leden):
-        return None, None, "vaste volgorde: alle rondes gespeeld"
-    lid = leden[gesproken % len(leden)]
-    return lid.ROL, "Geef je inbreng in hoogstens 150 woorden. Reageer op wat de anderen zeiden.", "vaste volgorde"
+    rollen = [l.ROL for l in leden]
+    gesproken = sum(1 for b in beurten if b["soort"] == "bericht" and b["spreker"] in rollen)
+    over = BEURTENBUDGET - gesproken
+    gebruiker = (
+        f"Raadsleden:\n{ledenlijst(beurten, leden)}\n\n"
+        f"Debat tot nu toe:\n\n{debat_tekst(beurten, leden)}\n\n"
+        f"Je open vragen na de vorige beurt: {json.dumps(STAAT['open_vragen'], ensure_ascii=False)}\n"
+        f"Nog {over} van de {BEURTENBUDGET} Raadslid-beurten over."
+        + ("" if gesproken >= MIN_BEURTEN_VOOR_STOP else f" Stoppen kan pas na {MIN_BEURTEN_VOOR_STOP} beurten.")
+        + "\n\nWie spreekt nu, met welke vraag, en waarom? Of stop je?"
+    )
+    keuze = koning_json(KONING_ROUTERING, gebruiker, max_tokens=1200) or {}
+    rol, vraag = keuze.get("rol"), keuze.get("vraag")
+    reden = str(keuze.get("reden") or "").strip()
+    open_vragen = [str(v) for v in keuze.get("open_vragen") or [] if str(v).strip()][:8]
+    if isinstance(rol, str) and rol.strip().lower() in ("", "null", "none"):
+        rol = None
 
+    if rol is None and keuze and gesproken >= MIN_BEURTEN_VOOR_STOP:
+        STAAT["open_vragen"] = open_vragen
+        return None, None, reden or "De Koning acht het debat afgerond.", open_vragen
+
+    if rol not in rollen or not vraag:
+        # Vangnet als de Koning-agent faalt of iets ongeldigs kiest: wie nog niet sprak, anders stoppen.
+        stil = [l for l in leden if not any(b["soort"] == "bericht" and b["spreker"] == l.ROL for b in beurten)]
+        if not stil:
+            return None, None, "Vangnet: Koning-agent gaf geen geldige keuze en alle Raadsleden spraken al.", STAAT["open_vragen"]
+        lid = stil[0]
+        rol = lid.ROL
+        vraag = ("Wat zegt jouw Kennisbron over de oorzaak van de Desync: wie deed wat en wanneer, en hoe leidde dat tot "
+                 "de symptomen? Noem record-ID's en dagen.")
+        reden = (f"Vangnet ({'Koning wilde te vroeg stoppen' if keuze else 'Koning-agent gaf geen geldige keuze'}): "
+                 f"{lid.NAAM} sprak nog niet en kan ontbrekende kennis hebben.")
+        open_vragen = open_vragen or STAAT["open_vragen"]
+    STAAT["open_vragen"] = open_vragen
+    return rol, str(vraag), reden or "Geen reden opgegeven.", open_vragen
+
+
+# ---------------------------------------------------------------- het Verdict van de Koning
+
+KONING_VERDICT = """Je bent de Koning van de Council of Achrona. Het debat is voorbij; jij stelt het Council Verdict op.
+Je hebt GEEN Kennisbron: je gebruikt alleen wat de Raadsleden in het debat zeiden, en alleen record-ID's die zij noemden.
+Elk Raadslid heeft een Belang en kan ernaast zitten: weeg beweringen die door meerdere Rollen gedragen worden zwaarder dan beweringen van één Rol over zijn eigen hoekje.
+
+Antwoord ALLEEN met een JSON-object in deze vorm:
+{
+  "samenvatting": "<3-5 zinnen: wat is er gebeurd en wat doen we eraan>",
+  "oorzaak": {
+    "ingreep":    {"bewering": "<wie deed wat, wanneer>  of null als onbekend", "bewijs": ["ID", ...], "zekerheid": 0.0-1.0},
+    "mechanisme": {"bewering": "<hoe leidt dat tot de symptomen> of null", "bewijs": [...], "zekerheid": 0.0-1.0},
+    "verloop":    {"bewering": "<wat toont het patroon in de tijd, met dagen> of null", "bewijs": [...], "zekerheid": 0.0-1.0}
+  },
+  "acties": [{"actie": "...", "reden": "...", "bewijs": ["ID", ...]}],
+  "risicos": [{"risico": "...", "mitigatie": "..."}],
+  "voorspelling": {"dag": <geheel getal>, "bewering": "<wanneer en waarom slaat de Desync opnieuw toe als niemand ingrijpt>", "bewijs": ["ID", ...]},
+  "geschillen": [{"onderwerp": "...", "standpunten": {"<rol>": "<standpunt van die Rol>"}, "uitkomst": "<hoe beslecht en waarom> of null", "bewijs": ["ID", ...]}]
+}
+Regels:
+- Elke bewering die niet null is, heeft minstens één ID als bewijs. Weet de Council het niet: bewering null, bewijs [].
+- acties staan in uitvoeringsvolgorde (eerst stoppen wat de schade veroorzaakt, dan herstellen, dan voorkomen). Minstens 3 acties, minstens 2 risico's.
+- zekerheid is eerlijk: hoog alleen als meerdere Rollen het onafhankelijk bevestigen.
+- voorspelling alleen als het debat een patroon in de tijd toont; laat het veld anders weg.
+- geschillen: elke echte tegenspraak of betwiste bewering uit het debat; standpunten alleen van Rollen die er iets over zeiden (sleutels: archmage, engineer, guardian_keeper, historian, oracle, beast_master).
+- Schrijf ID's precies als PREFIX-nnn met een gewoon koppelteken."""
+
+
+def toegelaten_ids(beurten):
+    """ID's die als bewijs mogen: genoemd door de Rol met die prefix, en (als we het kunnen nagaan) ook echt gezien in zijn toolresultaten."""
+    genoemd = {}
+    for b in beurten:
+        if b["soort"] == "bericht" and b["spreker"] in PREFIX:
+            for i in ids_in(b["tekst"]):
+                if i.startswith(PREFIX[b["spreker"]] + "-"):
+                    genoemd.setdefault(b["spreker"], set()).add(i)
+    toegelaten = set()
+    for rol, ids in genoemd.items():
+        gezien = STAAT["gezien"].get(rol)
+        toegelaten |= (ids & gezien) if gezien else ids
+    return toegelaten
+
+
+def filter_ids(lijst, toegelaten, weg):
+    uit = []
+    for i in lijst or []:
+        i = normaliseer(str(i)).strip()
+        if i in toegelaten and i not in uit:
+            uit.append(i)
+        elif i:
+            weg.add(i)
+    return uit
+
+
+def tekst_of(v, standaard):
+    v = str(v).strip() if v is not None else ""
+    return v or standaard
+
+
+def schrijf_verdict(run_id, beurten, leden):
+    toegelaten = toegelaten_ids(beurten)
+    gebruiker = (
+        f"Raadsleden:\n{ledenlijst(beurten, leden)}\n\n"
+        f"Debat:\n\n{debat_tekst(beurten, leden, met_toolcalls=False)}\n\n"
+        f"Record-ID's die Raadsleden uit hun eigen Kennisbron aanhaalden (alleen deze mogen als bewijs): "
+        f"{', '.join(sorted(toegelaten)) or '(geen)'}\n\nStel het Council Verdict op."
+    )
+    v = koning_json(KONING_VERDICT, gebruiker, max_tokens=4000) or {}
+    weg = set()
+
+    oorzaak = {}
+    for slot in SLOTS:
+        s = (v.get("oorzaak") or {}).get(slot) or {}
+        bewijs = filter_ids(s.get("bewijs"), toegelaten, weg)
+        bewering = s.get("bewering")
+        bewering = str(bewering).strip() if isinstance(bewering, str) and bewering.strip() and bewering.strip().lower() != "null" else None
+        if bewering and not bewijs:
+            bewering = None  # zonder bewijs geen bewering: eerlijk onbekend
+        slot_uit = {"bewering": bewering, "bewijs": bewijs if bewering else []}
+        try:
+            slot_uit["zekerheid"] = round(min(1.0, max(0.0, float(s.get("zekerheid")))), 2) if bewering else 0.0
+        except (TypeError, ValueError):
+            pass
+        oorzaak[slot] = slot_uit
+
+    acties = []
+    for a in v.get("acties") or []:
+        if isinstance(a, dict) and str(a.get("actie") or "").strip():
+            item = {"actie": str(a["actie"]).strip(), "reden": tekst_of(a.get("reden"), "Volgt uit de oorzaak.")}
+            bewijs = filter_ids(a.get("bewijs"), toegelaten, weg)
+            if bewijs:
+                item["bewijs"] = bewijs
+            acties.append(item)
+    risicos = [{"risico": str(r["risico"]).strip(), "mitigatie": tekst_of(r.get("mitigatie"), "Opvolgen door de Council.")}
+               for r in v.get("risicos") or [] if isinstance(r, dict) and str(r.get("risico") or "").strip()]
+
+    verdict = {
+        "run_id": run_id,
+        "samenvatting": tekst_of(v.get("samenvatting"), "De Koning kon geen samenvatting opstellen uit het debat."),
+        "oorzaak": oorzaak,
+        "acties": acties or [{"actie": "Het debat hervatten met de open vragen van de Koning.", "reden": "De Council kwam niet tot een onderbouwd herstelplan."}],
+        "risicos": risicos or [{"risico": "De oorzaak is onvoldoende onderbouwd.", "mitigatie": "Geen herstelactie uitvoeren zonder bevestiging door een tweede Rol."}],
+    }
+    p = v.get("voorspelling")
+    if isinstance(p, dict):
+        bewijs = filter_ids(p.get("bewijs"), toegelaten, weg)
+        try:
+            dag = int(p.get("dag"))
+        except (TypeError, ValueError):
+            dag = 0
+        if dag >= 1 and str(p.get("bewering") or "").strip() and bewijs:
+            verdict["voorspelling"] = {"dag": dag, "bewering": str(p["bewering"]).strip(), "bewijs": bewijs}
+
+    geschillen = []
+    for g in v.get("geschillen") or []:
+        if not isinstance(g, dict) or not str(g.get("onderwerp") or "").strip():
+            continue
+        standpunten = {k: str(t) for k, t in (g.get("standpunten") or {}).items() if k in PREFIX and str(t).strip()}
+        if not standpunten:
+            continue
+        bewijs = filter_ids(g.get("bewijs"), toegelaten, weg)
+        uitkomst = g.get("uitkomst")
+        uitkomst = str(uitkomst).strip() if isinstance(uitkomst, str) and uitkomst.strip() and bewijs else None
+        geschillen.append({"onderwerp": str(g["onderwerp"]).strip(), "standpunten": standpunten, "uitkomst": uitkomst, "bewijs": bewijs})
+    return normaliseer_diep(verdict), normaliseer_diep(geschillen), sorted(weg)
+
+
+def normaliseer_diep(x):
+    if isinstance(x, str):
+        return normaliseer(x)
+    if isinstance(x, list):
+        return [normaliseer_diep(i) for i in x]
+    if isinstance(x, dict):
+        return {k: normaliseer_diep(v) for k, v in x.items()}
+    return x
+
+
+# ---------------------------------------------------------------- kit: setup en debat-loop
 
 def controleer(leden):
     """Duidelijke melding in plaats van een traceback bij de meest voorkomende fouten."""
@@ -91,14 +355,22 @@ def kennisbron_bestanden(rol):
 
 
 def instructies(lid, bestanden, mcp):
+    pre = PREFIX[lid.ROL]
     tekst = (
         f"Je bent de {lid.NAAM}, een Raadslid in de Council of Achrona. {lid.PERSPECTIEF}\n"
-        "Je debatteert met de andere Raadsleden over de oorzaak van de Desync. "
-        "Baseer je alleen op je eigen Kennisbron en noem bij elke bewering de record-ID's precies zoals ze in je Kennisbron staan. Verzin nooit een ID. "
-        "Zeg het eerlijk als je iets niet weet."
+        "Je debatteert met de andere Raadsleden over de oorzaak van de Desync. De Koning stelt je telkens één gerichte vraag.\n"
+        "Regels:\n"
+        f"- Baseer je alleen op je eigen Kennisbron. Jouw record-ID's beginnen met {pre}-. Noem bij elke bewering de ID's precies "
+        "zoals ze in je Kennisbron staan, met een gewoon koppelteken. Verzin nooit een ID en neem geen ID's van anderen over als eigen bewijs.\n"
+        "- Noem dagen of tijdstippen als je bron ze geeft.\n"
+        "- Beantwoord de vraag van de Koning eerst en direct. Herhaal niet wat anderen al zeiden.\n"
+        "- Zegt een ander Raadslid iets dat je bron tegenspreekt of bevestigt? Zeg dat expliciet, met ID's.\n"
+        "- Verwijst je bron naar een andere Rol of naar iets wat een andere Rol moet weten? Zeg dat (de Koning beslist wie hij dan vraagt).\n"
+        "- Zeg het eerlijk als je bron iets niet vermeldt. Hoogstens 150 woorden, geen inleiding."
     )
     if mcp:
-        tekst += "\nLees of doorzoek je Kennisbron met je tools voor je spreekt."
+        tekst += ("\nRaadpleeg je Kennisbron ALTIJD met je tools vóór je antwoordt: zoek of zoek_betekenis om records te vinden, "
+                  "toon om de records die je noemt na te lezen, lees_kennisbron voor het overzicht.")
     elif bestanden:
         tekst += "\n\nJe Kennisbron:\n\n" + "\n\n".join(f"## {p.name}\n\n{p.read_text(encoding='utf-8')}" for p in bestanden)
     else:
@@ -124,6 +396,19 @@ def toolcalls(response):
                 yield c.name, json.loads(args) if isinstance(args, str) and args else (args or {})
 
 
+def gezien_ids(response):
+    """Record-ID's die echt in de toolresultaten van dit Raadslid stonden (om verzonnen ID's te herkennen)."""
+    gevonden = set()
+    for msg in response.messages:
+        for c in msg.contents:
+            if c.type == "function_result":
+                delen = [c.result] + [getattr(i, "text", None) for i in (c.items or [])]
+                for d in delen:
+                    if d is not None:
+                        gevonden.update(ids_in(d if isinstance(d, str) else str(d)))
+    return gevonden
+
+
 async def run():
     load_dotenv(ROOT / ".env")
     opties = {"reasoning_effort": os.environ["REASONING"]} if os.getenv("REASONING") else None  # minder denkwerk = minder tokens
@@ -131,6 +416,7 @@ async def run():
     leden = raadsleden.alle()
     controleer(leden)
     beurten, verbruik = [], {}
+    STAAT.update(verbruik=verbruik, gezien={}, open_vragen=[])
     trace = {"run_id": run_id, "status": "bezig", "raadsleden": [l.ROL for l in leden], "beurten": beurten, "geschillen": [], "verbruik": verbruik}
 
     def bewaar(naam, data):
@@ -164,56 +450,58 @@ async def run():
         (ROOT / "verdict.json").unlink(missing_ok=True)  # setup gelukt: geen Verdict van een vorige run laten staan
         bewaar("trace.json", trace)
         per_rol = {lid.ROL: (lid, mcp_url, agent) for lid, mcp_url, agent in agents}
-        debat, ronde = [], 1
+        ronde = 1
         while True:
             gesproken = sum(1 for b in beurten if b["soort"] == "bericht" and b["spreker"] in per_rol)
+            trace["aan_het_woord"] = "koning"
+            bewaar("trace.json", trace)
             if gesproken >= BEURTENBUDGET:
-                rol, vraag, reden = None, None, f"Beurtenbudget op ({BEURTENBUDGET} Raadslid-beurten)"
+                rol, vraag, reden, open_vragen = None, None, f"Beurtenbudget op ({BEURTENBUDGET} Raadslid-beurten)", STAAT["open_vragen"]
             else:
-                rol, vraag, reden = kies_volgende(beurten, leden)
+                rol, vraag, reden, open_vragen = await asyncio.to_thread(kies_volgende, beurten, leden)
             if rol is not None and rol not in per_rol:
                 sys.exit(f"kies_volgende() koos {rol!r}, maar die Rol zit niet in raadsleden/.")
-            if rol is not None:
-                ronde = gesproken // len(leden) + 1
-            # Elke keuze van de Koning staat in de trace: aan wie, welke vraag en waarom.
-            beurt(ronde, "koning", "routering", aan=rol, vraag=vraag, reden=reden)
+            ronde = gesproken + 1 if rol is not None else ronde  # één ronde per Raadslid-beurt
+            # Elke keuze van de Koning staat in de trace: aan wie, welke vraag, waarom en wat nog open ligt.
+            beurt(ronde, "koning", "routering", aan=rol, vraag=vraag, reden=reden, open_vragen=open_vragen)
             print(f"\n[Koning] {'stopt' if rol is None else '→ ' + per_rol[rol][0].NAAM}: {reden}")
             if rol is None:
                 break
             lid, mcp_url, agent = per_rol[rol]
-            # Wie ziet wat? Hier ziet elk Raadslid het hele debat (broadcast). Ook dat is een keuze.
-            prompt = "Debat tot nu toe:\n\n" + ("\n\n".join(debat) or "(nog niets)") + f"\n\nVraag aan jou: {vraag}"
+            # Wie ziet wat? Het Raadslid ziet het debat (berichten en vragen van de Koning) en zijn eigen vraag.
+            prompt = ("Debat tot nu toe:\n\n" + debat_tekst(beurten[:-1], leden, met_toolcalls=False)
+                      + f"\n\nVraag van de Koning aan jou: {vraag}")
             trace["aan_het_woord"] = rol
             bewaar("trace.json", trace)
             r = await agent.run(prompt, options=opties)
             tel(verbruik, "klein", r.usage_details)
-            for tool, args in toolcalls(r):
+            calls = list(toolcalls(r))
+            if mcp_url and not calls:
+                # Spreken zonder je bron te lezen = verzonnen ID's. Eén keer opnieuw, nu verplicht met tools.
+                print(f"[{lid.NAAM}] antwoordde zonder toolcall: opnieuw, met Kennisbron.")
+                r = await agent.run(prompt + "\n\nJe raadpleegde je Kennisbron niet. Gebruik nu EERST je tools "
+                                    "(zoek / zoek_betekenis / toon) en antwoord pas daarna.", options=opties)
+                tel(verbruik, "klein", r.usage_details)
+                calls = list(toolcalls(r))
+            for tool, args in calls:
                 beurt(ronde, rol, "toolcall", tool=tool, argumenten=args, pad=mcp_url)
+            STAAT["gezien"].setdefault(rol, set()).update(gezien_ids(r))
             beurt(ronde, rol, "bericht", tekst=r.text)
-            debat.append(f"{lid.NAAM}: {r.text}")
             print(f"\n[ronde {ronde}] {lid.NAAM}:\n{r.text}")
 
     # De Koning heeft geen Rol en geen Kennisbron: hij kent alleen wat de Raadsleden inbrachten.
     trace["aan_het_woord"] = "koning"
     bewaar("trace.json", trace)
-    koning = Agent(client("MODEL_GROOT"), "Je bent de Koning van de Council of Achrona. Je hebt geen Kennisbron.", name="koning")
-    r = await koning.run(
-        options=opties,
-        messages="Debat:\n\n" + "\n\n".join(debat)
-        + "\n\nVat samen: waarover zijn de Raadsleden het eens, waarover niet, en welk bewijs (record-ID's) noemden ze?",
-    )
-    tel(verbruik, "groot", r.usage_details)
-    beurt(ronde + 1, "koning", "bericht", tekst=r.text)
-    print(f"\n[Koning]:\n{r.text}")
+    verdict, geschillen, weg = await asyncio.to_thread(schrijf_verdict, run_id, beurten, leden)
+    verdict["run_id"] = run_id
+    trace["geschillen"] = geschillen
+    if weg:
+        trace["geweigerde_ids"] = weg  # ID's die de Koning wilde gebruiken maar die geen Raadslid uit zijn bron haalde
+    besluit = verdict["samenvatting"] + "".join(
+        f"\n- {slot}: {verdict['oorzaak'][slot]['bewering'] or 'onbekend'}" for slot in SLOTS)
+    beurt(ronde + 1, "koning", "bericht", tekst=besluit)
+    print(f"\n[Koning]:\n{besluit}")
 
-    # TODO voor jullie team: laat de Council dit Verdict zelf invullen (zie schema/verdict.json).
-    verdict = {
-        "run_id": run_id,
-        "samenvatting": "TODO",
-        "oorzaak": {slot: {"bewering": None, "bewijs": []} for slot in ("ingreep", "mechanisme", "verloop")},
-        "acties": [{"actie": "TODO", "reden": "TODO"}],
-        "risicos": [{"risico": "TODO", "mitigatie": "TODO"}],
-    }
     trace["status"], trace["aan_het_woord"] = "klaar", None
     bewaar("trace.json", trace)
     bewaar("verdict.json", verdict)

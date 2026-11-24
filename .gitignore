@@ -4,3 +4,7 @@ __pycache__/
 *.egg-info/
 *.log
 kennisbronnen/*/
+
+# lokale VPS/OpenClaw-instructies (niet publiek)
+instructions.md
+LEESMIJ.md
