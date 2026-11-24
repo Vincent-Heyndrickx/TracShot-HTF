@@ -197,6 +197,9 @@
   .keuze details li.op { color: var(--stil); text-decoration: line-through; }
   .al.keuze.stop .geeft { font-weight: 600; color: var(--voorzitter); }
   .al.keuze.stop .reden { font-style: normal; font-size: inherit; font-weight: 600; }
+  .al.mislukt { font: 400 .85rem/1.45 var(--sans); }
+  .al.mislukt .wie { color: var(--fout); }
+  .al.mislukt code { font: .78rem/1.3 var(--mono); overflow-wrap: anywhere; }
   .al.besluit { border-top: 2px solid var(--voorzitter); background: color-mix(in srgb, var(--voorzitter) 6%, transparent); }
   .al.besluit .wie { color: var(--voorzitter); }
 
@@ -451,6 +454,10 @@ function bouwItem(b) {
     const wat = b.soort === "toolcall" ? `raadpleegt de eigen bron <code>${esc(b.tool)}${args ? " " + esc(args) : ""}</code>` : `kreeg <code>${esc(b.bestand)}</code> in de prompt`;
     el.classList.add("bron");
     el.innerHTML = `<span class="wie">${sigil("bron")}bron</span>${nr}<div class="tekst">${esc(lidw(b.spreker)).replace(/^./, c => c.toUpperCase())} ${wat}${vlag}</div>`;
+  } else if (b.mislukt) {
+    el.classList.add("mislukt");
+    el.style.setProperty("--k", "var(--fout)");
+    el.innerHTML = `<span class="wie">${sigil("fout")}Orchestrator<small>beurt mislukt</small></span>${nr}<div class="tekst"><p><span class="vlag">De beurt van ${esc(lidw(b.mislukt.rol))} is mislukt</span> (poging ${esc(b.mislukt.poging)}). Geen bijdrage, telt niet mee in het budget.</p><p><code>${esc(b.mislukt.fout)}</code></p></div>`;
   } else if (b.spreker === "koning" || b.spreker === "mens") {
     el.classList.add("besluit");
     el.innerHTML = `${kantlijn(b.spreker, b.spreker === "koning" ? "besluit" : "tussenkomst")}${nr}<div class="tekst">${opmaak(b.tekst)}</div>`;
@@ -523,7 +530,7 @@ function tekenLive() {
 /* ---------- analyse van de trace ---------- */
 function analyse(trace) {
   const beurten = trace.beurten || [];
-  const tel = {}, routes = [], padfouten = [], koningTools = [], vreemd = [], zonderRoutering = [], tools = {};
+  const tel = {}, routes = [], padfouten = [], koningTools = [], vreemd = [], zonderRoutering = [], tools = {}, zonderId = [], mislukt = [];
   let toegewezen = null, raadslid = 0, laatsteRoute = null, gestopt = null;
   const opeenvolging = [];
   for (const b of beurten) {
@@ -536,14 +543,16 @@ function analyse(trace) {
       else if ((b.soort === "toolcall" && b.pad && !b.pad.includes(`/${b.spreker}/`)) || (b.soort === "bestand" && b.bestand && !b.bestand.startsWith(b.spreker + "/"))) padfouten.push(b.nr);
       continue;
     }
+    if (b.soort === "bericht" && b.mislukt) { mislukt.push(`${naam(b.mislukt.rol)} (alinea ${b.nr})`); continue; }
     if (b.soort === "bericht") {
       t.berichten++;
+      if (ROLLEN.includes(b.spreker) && !ids(b.tekst).length) zonderId.push(b.nr);
       for (const x of ids(b.tekst)) if (x.raar) vreemd.push(x.id);
       if (ROLLEN.includes(b.spreker)) { raadslid++; opeenvolging.push(b.spreker); if (toegewezen !== b.spreker) zonderRoutering.push(b.nr); toegewezen = null; }
     }
   }
   const openRoutes = beurten.filter(b => b.soort === "routering");
-  return { tel, routes, padfouten, koningTools, vreemd, zonderRoutering, raadslid, laatsteRoute, gestopt, opeenvolging, openRoutes, tools };
+  return { zonderId, mislukt, tel, routes, padfouten, koningTools, vreemd, zonderRoutering, raadslid, laatsteRoute, gestopt, opeenvolging, openRoutes, tools };
 }
 
 /* ---------- zitplan: halfrond met de Koning als voorzitter ---------- */
@@ -642,6 +651,9 @@ function tekenZij() {
     [a.koningTools.length ? "fout" : "ok", a.koningTools.length ? `De Koning las een Kennisbron (beurt ${a.koningTools.join(", ")})` : "De Koning las geen Kennisbron"],
     [zonderBron.length ? "let" : "ok", zonderBron.length ? `Sprak zonder bron: ${zonderBron.map(naam).join(", ")}` : "Wie sprak, raadpleegde eerst de bron"],
     [a.vreemd.length ? "let" : "ok", a.vreemd.length ? `ID's met een vreemd koppelteken: ${[...new Set(a.vreemd)].join(", ")}` : "ID's in de juiste vorm"],
+    [a.mislukt.length ? "fout" : "ok", a.mislukt.length ? `${a.mislukt.length} mislukte ${a.mislukt.length === 1 ? "beurt" : "beurten"}: ${a.mislukt.join(", ")}` : "Geen mislukte beurten"],
+    [a.zonderId.length ? "let" : "ok", a.zonderId.length ? `${a.zonderId.length} van ${a.raadslid} bijdragen zonder record-ID (alinea ${a.zonderId.join(", ")})` : "Elke bijdrage noemt minstens één record-ID"],
+    ...(t.status === "klaar" && !a.raadslid ? [["fout", "Geen enkele bijdrage van een Raadslid: het Verdict steunt nergens op"]] : []),
     [leden.length >= 3 ? "ok" : "let", `${leden.length} Rollen in de Raad (minimum 3)`],
     [a.raadslid > BUDGET ? "fout" : "ok", `${a.raadslid} van ${BUDGET} Raadslid-beurten`],
     [a.zonderRoutering.length ? "fout" : "ok", a.zonderRoutering.length ? `Beurt zonder routering ervoor (${a.zonderRoutering.join(", ")})` : "Elke beurt had een routering van de Koning"],

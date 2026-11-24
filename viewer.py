@@ -10,6 +10,9 @@ Zonder SSE (oude browser, proxy) valt de pagina terug op gewoon ophalen.
 Run starten vanuit de viewer: POST /start start `council.py` in deze map (POST /stop stopt een run die de viewer startte).
 Lokaal (rechtstreeks op 127.0.0.1, zonder proxy) mag dat altijd. Via een proxy (bv. nginx op de VPS) alleen met de
 startsleutel uit VIEWER_START_KEY (omgeving of .env); zonder sleutel kan niemand van buitenaf een run starten.
+De run krijgt extra instellingen (modelroute, toolmodus, ...) uit .env.run (of het pad in VIEWER_RUN_ENV): die waarden
+gaan vóór .env, want council.py overschrijft geen bestaande omgevingsvariabelen. Via een proxy kan de knop pas starten als
+dat bestand bestaat, zodat een run nooit per ongeluk met de verkeerde modelroute vertrekt.
 """
 import hmac
 import http.server
@@ -42,6 +45,23 @@ def main():
                 if regel.strip().startswith("VIEWER_START_KEY="):
                     sleutel = regel.split("=", 1)[1].strip().strip('"').strip("'")
         return sleutel
+
+    def run_env_pad():
+        return Path(os.getenv("VIEWER_RUN_ENV", "").strip() or ROOT / ".env.run")
+
+    def run_env():
+        """KEY=waarde-regels uit .env.run; None als het bestand er niet is."""
+        pad = run_env_pad()
+        if not pad.is_file():
+            return None
+        uit = {}
+        for regel in pad.read_text(encoding="utf-8", errors="replace").splitlines():
+            regel = regel.strip()
+            if not regel or regel.startswith("#") or "=" not in regel:
+                continue
+            k, v = regel.split("=", 1)
+            uit[k.strip().removeprefix("export ").strip()] = v.strip().strip('"').strip("'")
+        return uit
 
     run = {"proces": None, "log": None, "einde": 0.0}
     slot = threading.Lock()
@@ -101,12 +121,15 @@ def main():
         def toegestaan(self):
             if self.lokaal():
                 return True
+            if run_env() is None:
+                return False  # via internet alleen met een vastgelegde run-omgeving
             sleutel = startsleutel()
             return bool(sleutel) and hmac.compare_digest(self.headers.get("X-Start-Key", "").encode(), sleutel.encode())
 
         def runstaat(self):
             return {"eigen": eigen_run_bezig(), "bezig": eigen_run_bezig() or andere_run_bezig(),
-                    "lokaal": self.lokaal(), "sleutel_kan": bool(startsleutel())}
+                    "lokaal": self.lokaal(), "sleutel_kan": bool(startsleutel()) and run_env() is not None,
+                    "run_env": run_env() is not None}
 
         def json(self, data, code=200):
             body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -121,6 +144,8 @@ def main():
             pad = self.path.split("?")[0]
             if pad not in ("/start", "/stop"):
                 return self.send_error(404)
+            if not self.lokaal() and run_env() is None:
+                return self.json({"fout": "Starten via de viewer kan hier pas als .env.run op de server staat."}, 403)
             if not self.toegestaan():
                 return self.json({"fout": "Geen toegang: een run starten of stoppen vraagt de startsleutel."}, 403)
             with slot:
@@ -133,6 +158,7 @@ def main():
                     return self.json({"fout": "Er loopt al een run. Wacht tot ze klaar is."}, 409)
                 env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
                 env.pop("VIEWER_START_KEY", None)
+                env.update(run_env() or {})
                 if map_ != ROOT:
                     env["COUNCIL_OUTPUT_DIR"] = str(map_)
                 if run["log"]:
