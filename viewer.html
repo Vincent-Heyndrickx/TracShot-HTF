@@ -62,6 +62,9 @@
   .verbinding.live { color: var(--griffie); }
   .verbinding.live i { background: var(--voorzitter); animation: ping 2s ease-out infinite; }
   .verbinding.pollt i { background: var(--let); }
+  .verbinding.klaar { color: var(--zacht); }
+  .verbinding.klaar i { background: transparent; border: 1.5px solid var(--zacht); animation: none; }
+  :root.klaar .kaart { position: static; max-height: none; overflow: visible; }
   @keyframes ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--voorzitter) 55%, transparent); } 100% { box-shadow: 0 0 0 8px transparent; } }
   #status { font-size: .9rem; min-width: 0; }
   #status b { font-weight: 700; }
@@ -102,7 +105,10 @@
   #zitplan .zetel.spreekt use { color: var(--vel); }
   #zitplan .zetel.spreekt .halo { fill: none; stroke: var(--k); stroke-width: 2; animation: halo 1.8s ease-out infinite; transform-box: fill-box; transform-origin: center; }
   @keyframes halo { from { opacity: .7; transform: scale(1); } to { opacity: 0; transform: scale(1.5); } }
-  #zitplan .woord { fill: none; stroke: var(--voorzitter); stroke-linecap: round; opacity: .3; }
+  #zitplan .woord { fill: none; stroke: var(--voorzitter); stroke-linecap: round; opacity: .6; }
+  #zitplan .banken { fill: none; stroke: var(--lijn); stroke-width: 10; stroke-linecap: round; }
+  :root.pitch #zitplan .zetel text, :root.pitch #zitplan .zetel .tel { font-size: 17px; }
+  :root.pitch #zitplan .voorzitter text { font-size: 14px; }
   #zitplan .woord.laatste { opacity: 1; stroke-dasharray: 400; stroke-dashoffset: 400; animation: geef .9s cubic-bezier(.16, 1, .3, 1) forwards; }
   @keyframes geef { to { stroke-dashoffset: 0; } }
   #zitplan .voorzitter rect { fill: var(--vel); stroke: var(--voorzitter); stroke-width: 2; }
@@ -535,26 +541,26 @@ function tekenZitplan(t, a, spreekt) {
     const x = CX + R * Math.cos(hoek), y = CY + R * Math.sin(hoek);
     zetels[r] = { x, y };
     const n = a.tel[r]?.berichten || 0;
-    const delen = naam(r).split(" ");
+    const delen = naam(r).split(" "), LH = PITCH ? 18 : 13;
     const cls = ["zetel", leden.includes(r) ? "" : "afwezig", spreekt === r ? "spreekt" : ""].join(" ");
-    const label = delen.map((d, j) => `<tspan x="${x}" dy="${j ? 13 : 0}">${esc(d)}</tspan>`).join("");
+    const label = delen.map((d, j) => `<tspan x="${x}" dy="${j ? LH : 0}">${esc(d)}</tspan>`).join("");
     return `<g class="${cls}" style="--k:${kleur(r)}"><title>${esc(naam(r))}: ${n} beurten${leden.includes(r) ? "" : " (niet in de Raad)"}</title>
       ${spreekt === r ? `<circle class="halo" cx="${x}" cy="${y}" r="22"/>` : ""}<circle class="bank" cx="${x}" cy="${y}" r="22"/>
       <use href="#s-${r}" x="${x - 12}" y="${y - 12}" width="24" height="24"/>
-      <text x="${x}" y="${y - 31 - 13 * (delen.length - 1)}" text-anchor="middle">${label}</text>${n ? `<text class="tel" x="${x + 27}" y="${y + 4}" text-anchor="start">${n}×</text>` : ""}</g>`;
+      <text x="${x}" y="${y - (PITCH ? 33 : 31) - LH * (delen.length - 1)}" text-anchor="middle">${label}</text>${n ? `<text class="tel" x="${x + 27}" y="${y + 4}" text-anchor="start">${n}×</text>` : ""}</g>`;
   });
   const telRoute = {}; a.routes.forEach(r => telRoute[r] = (telRoute[r] || 0) + 1);
   const VX = CX, VY = CY + 6;
   const pad = (r, cls, w) => { const z = zetels[r]; if (!z) return ""; const dx = z.x - VX, dy = z.y - VY, d = Math.hypot(dx, dy), ex = z.x - dx / d * 24, ey = z.y - dy / d * 24;
     return `<path class="woord ${cls}" stroke-width="${w}" d="M${VX} ${VY - 20} Q${VX + dx * .25} ${VY - 20 + dy * .15} ${ex} ${ey}"/>`; };
   const sporen = Object.entries(telRoute).map(([r, n]) => pad(r, "", 1 + n * 1.6)).join("");
-  const laatste = t.status !== "klaar" && a.laatsteRoute ? pad(a.laatsteRoute.aan, "laatste", 3) : "";
+  const laatste = a.laatsteRoute ? pad(a.laatsteRoute.aan, "laatste", 3) : "";
   const k = spreekt === "koning" ? "spreekt" : "";
   const html = `<svg viewBox="0 0 440 290" role="img" aria-label="Zitplan: de Koning zit voor, de zes Rollen in een halfrond. Lijnen tonen aan wie de Koning het woord gaf.${spreekt ? ` Nu spreekt ${esc(naam(spreekt))}.` : ""}">
-    ${sporen}${laatste}${seats.join("")}
-    <g class="voorzitter ${k}"><rect x="${VX - 44}" y="${VY - 20}" width="88" height="36"/><use href="#s-koning" x="${VX - 36}" y="${VY - 13}" width="22" height="22"/><text x="${VX + 6}" y="${VY + 2}" text-anchor="middle" dx="8">KONING</text></g></svg>`;
+    <path class="banken" d="M${CX - R} ${CY} A${R} ${R} 0 0 1 ${CX + R} ${CY}"/>${sporen}${laatste}${seats.join("")}
+    <g class="voorzitter ${k}"><rect x="${VX - 54}" y="${VY - 20}" width="108" height="36"/><use href="#s-koning" x="${VX - 46}" y="${VY - 13}" width="22" height="22"/><text x="${VX + 12}" y="${VY + 3}" text-anchor="middle">KONING</text></g></svg>`;
   // alleen vervangen als iets veranderde, anders start de lijn-animatie opnieuw
-  const sl = [Object.entries(telRoute).join(), spreekt, a.laatsteRoute?.nr, t.status, leden.join()].join("|");
+  const sl = [Object.entries(telRoute).join(), spreekt, PITCH, a.laatsteRoute?.nr, t.status, leden.join()].join("|");
   if ($("zitplan").dataset.sl !== sl) { $("zitplan").innerHTML = html; $("zitplan").dataset.sl = sl; }
 }
 
@@ -581,6 +587,9 @@ function tekenZij() {
   // Status in de kop
   const st = $("status");
   st.classList.remove("vast");
+  document.documentElement.classList.toggle("klaar", t.status === "klaar");
+  if (t.status === "klaar") verbinding("klaar", "afgelopen");
+  else if ($("verbinding").classList.contains("klaar")) verbinding(BRON === "sse" ? "live" : "pollt", BRON === "sse" ? "live" : "ophalen elke 1,5 s");
   if (t.status === "klaar") st.innerHTML = a.gestopt && a.raadslid < BUDGET ? `Zitting gesloten: de Koning stopte na <b>${a.raadslid} van ${BUDGET}</b> beurten` : `Zitting gesloten na <b>${a.raadslid}</b> beurten`;
   else st.innerHTML = spreekt ? (spreekt === "koning" ? `<b style="color:var(--voorzitter)">De Koning</b> ${l.soort === "verdict" ? "schrijft het Verdict" : "kiest wie het woord krijgt"}` : `<b style="color:${kleur(spreekt)}">${esc(naam(spreekt))}</b> heeft het woord`) : "Zitting bezig";
 
@@ -752,12 +761,13 @@ setInterval(() => {
 })();
 
 /* ---------- transport: Server-Sent Events, met ophalen als vangnet ---------- */
+let BRON = "sse";
 function verbinding(soort, tekst) { $("verbinding").className = "verbinding " + soort; $("verbinding").lastElementChild.textContent = tekst; }
 const verwerk = { trace: opTrace, verdict: opVerdict, live: opLive };
 function lees(soort, data) { try { verwerk[soort](JSON.parse(data)); } catch (e) { console.warn("onleesbaar", soort, e); } }
 
 function haalLus() {
-  verbinding("pollt", "ophalen elke 1,5 s");
+  BRON = "poll"; verbinding("pollt", "ophalen elke 1,5 s");
   const vorig = {};
   const tik = async () => {
     for (const s of ["trace", "verdict", "live"]) {
@@ -776,7 +786,7 @@ function verbind() {
   if (!("EventSource" in window)) return haalLus();
   const es = new EventSource("events");
   let ooitOpen = false, fouten = 0;
-  es.onopen = () => { ooitOpen = true; fouten = 0; verbinding("live", "live"); };
+  es.onopen = () => { ooitOpen = true; fouten = 0; if (S.trace?.status !== "klaar") verbinding("live", "live"); };
   for (const s of Object.keys(verwerk)) es.addEventListener(s, e => lees(s, e.data));
   es.onerror = () => {
     fouten++;
