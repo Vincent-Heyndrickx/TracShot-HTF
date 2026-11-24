@@ -237,6 +237,20 @@
   .zaal:has(.zetel.spreekt) .zetel:not(.spreekt):not(.koning) .portret { filter: saturate(.5) brightness(.58); }
   @media (max-width: 720px) { .portret { width: 58px; height: 58px; } .zetel.koning .portret { width: 68px; height: 68px; } .zetel.koning::before { width: 130px; height: 130px; top: 34px; } .zetel.spreekt::before { width: 160px; } }
 
+  /* ---------- volledig scherm: alleen de zaal, om het debat te volgen ---------- */
+  .vol-uit { display: none; position: absolute; z-index: 5; top: 16px; right: 18px; font: 700 .85rem/1 var(--sans); color: var(--licht); background: rgb(5 8 14 / .6); border: 1px solid color-mix(in srgb, var(--licht) 45%, transparent); padding: 9px 14px; cursor: pointer; }
+  .vol-uit:hover, .vol-uit:focus-visible { background: var(--licht); color: var(--zaal); }
+  .spel:fullscreen { padding: 0; border: 0; width: 100vw; height: 100vh; }
+  .spel:fullscreen .vol-uit { display: block; }
+  .spel:fullscreen .zaal { height: 100vh; max-width: min(1700px, 100vw); }
+  .spel:fullscreen .portret { width: 132px; height: 132px; } .spel:fullscreen .zetel.koning .portret { width: 156px; height: 156px; }
+  .spel:fullscreen .zetel { width: 210px; gap: 6px; } .spel:fullscreen .zetel.koning::before { width: 310px; height: 310px; top: 78px; }
+  .spel:fullscreen .naambord { font-size: 1rem; padding: 4px 12px; } .spel:fullscreen .teller { font-size: .95rem; }
+  .spel:fullscreen .tafeltitel { font-size: clamp(1.6rem, 3vw, 2.6rem); } .spel:fullscreen .munten li { width: 38px; height: 38px; }
+  .spel:fullscreen .tafelsub, .spel:fullscreen .tafelkeuze, .spel:fullscreen .tafelkeuze span { font-size: 1.05rem; }
+  .spel:fullscreen .bubbel { width: min(640px, 80%); font-size: 1.2rem; }
+  .spel:fullscreen .tafellink { display: none; }
+
   /* ---------- zitplan (halfrond) ---------- */
   #zitplan svg { display: block; width: 100%; height: auto; }
   #zitplan .bank { fill: var(--vel); stroke: var(--k); stroke-width: 2; }
@@ -476,6 +490,7 @@
   <nav aria-label="Weergave">
     <button class="knop hoofd" id="start" type="button" hidden>Start een run</button>
     <a class="knop" href="#verdict" id="naar-verdict" hidden>Naar het Verdict</a>
+    <button class="knop" id="vol" type="button" title="Toont alleen de zaal op het hele scherm. Sneltoets: F">Volledig scherm</button>
     <button class="knop" id="pitch" type="button" aria-pressed="false" title="Grotere letters, volgt het debat automatisch">Beamer</button>
     <button class="knop" id="thema" type="button">Dag of nacht</button>
   </nav>
@@ -496,6 +511,7 @@
     <svg class="sporen" id="sporen" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
     <div class="tafelinfo"><p class="tafeltitel" id="tafeltitel">Wacht op een zitting</p><ol class="munten" id="munten"></ol><p class="tafelsub" id="tafelsub">10 beurten voor de Raadsleden</p><p class="tafelkeuze" id="tafelkeuze" hidden></p><a class="tafellink" id="tafellink" href="#verdict" hidden>Lees het Verdict</a></div>
     <div id="zetels"></div>
+    <button class="vol-uit" id="vol-uit" type="button">Sluit volledig scherm (Esc)</button>
     <div class="bubbel" id="bubbel" hidden aria-hidden="true"></div>
   </div>
 </section>
@@ -960,11 +976,11 @@ function zetBubbel(rol, html, live) {
   b.className = `bubbel ${onder ? "onder" : "boven"}${live ? " live" : ""}${b.classList.contains("komt") ? " komt" : ""}`;
   b.style.setProperty("--k", kleur(rol));
   const breed = b.offsetParent ? b.offsetParent.clientWidth : 1000;
-  const bw = Math.min(PITCH ? 560 : 420, breed * (PITCH ? .8 : .86));
+  const VOL = !!document.fullscreenElement, bw = Math.min(VOL ? 640 : PITCH ? 560 : 420, breed * (VOL || PITCH ? .8 : .86));
   const links = Math.max(12, Math.min(breed - bw - 12, breed * x / 100 - bw / 2));
   b.style.left = `${links}px`;
   b.style.setProperty("--pijl", `${Math.max(24, Math.min(bw - 24, breed * x / 100 - links))}px`);
-  const marge = PITCH ? 104 : 84;
+  const marge = VOL ? 118 : PITCH ? 104 : 84;
   if (onder) { b.style.top = `calc(${y}% + ${marge}px)`; b.style.bottom = ""; }
   else { b.style.bottom = `calc(${100 - y}% + ${marge}px)`; b.style.top = ""; }
   b.innerHTML = html;
@@ -1044,6 +1060,10 @@ $("id-sluit").addEventListener("click", sluitId);
 document.addEventListener("keydown", e => { if (e.key === "Escape" && focusId) sluitId(); });
 
 /* ---------- beamer, live volgen, vastgelopen run ---------- */
+function zetVol() { const s = $("spel"); if (document.fullscreenElement) document.exitFullscreen(); else if (s.requestFullscreen) s.requestFullscreen().catch(() => {}); }
+$("vol").addEventListener("click", zetVol); $("vol-uit").addEventListener("click", zetVol);
+if (!document.fullscreenEnabled) $("vol").hidden = true;
+document.addEventListener("keydown", e => { if (e.key.toLowerCase() === "f" && !e.ctrlKey && !e.metaKey && !e.altKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) zetVol(); });
 function zetPitch(aan) {
   PITCH = aan;
   document.documentElement.classList.toggle("pitch", aan);
