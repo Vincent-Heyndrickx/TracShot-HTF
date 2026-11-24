@@ -10,8 +10,8 @@
 <style>
   /* ---------- tokens: dagzitting (papier) ---------- */
   :root {
-    --papier: #f4f1ea; --vel: #fbf9f4; --gezet: #ebe5d8; --lijn: #d8d2c4; --lijn-sterk: #1a1a1a;
-    --inkt: #1a1a1a; --zacht: #4f493e; --stil: #6b6355;
+    --papier: #eceeeb; --vel: #f8f9f7; --gezet: #e0e3df; --lijn: #cbd0ca; --lijn-sterk: #1a1a1a;
+    --inkt: #1a1c1e; --zacht: #474d52; --stil: #5f666b;
     --voorzitter: #8c1d18; --griffie: #0f3d6e; --griffie-zacht: rgba(15, 61, 110, .08);
     --ok: #1f6b3a; --let: #8a5200; --fout: #a3201b;
     --archmage: #6a3fb5; --engineer: #0d6f63; --guardian_keeper: #1f56b8; --historian: #85552a; --oracle: #a3265c; --beast_master: #3d7420; --mens: #a3201b; --koning: var(--voorzitter);
@@ -83,6 +83,14 @@
   .blok { margin-bottom: 26px; }
   .blok h2, .zit { font: 700 .76rem/1.2 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--griffie); margin: 0 0 10px; }
 
+  .laatste-keuze { display: none; }
+  :root.pitch .laatste-keuze:not([hidden]) { display: block; border: 2px solid var(--voorzitter); padding: 12px 14px; background: var(--vel); }
+  .laatste-keuze h2 { color: var(--voorzitter); }
+  .laatste-keuze .aan { font: 700 1rem/1.3 var(--sans); color: var(--k); display: flex; gap: 6px; align-items: center; margin: 0 0 4px; }
+  .laatste-keuze .vraag { font: 600 1.08rem/1.35 var(--serif); margin: 0 0 6px; }
+  .laatste-keuze .reden { font: italic .95rem/1.4 var(--serif); margin: 0; color: var(--zacht); }
+  @media (max-width: 1100px) { :root.pitch .laatste-keuze:not([hidden]) { display: none; } }
+
   /* ---------- zitplan (halfrond) ---------- */
   #zitplan svg { display: block; width: 100%; height: auto; }
   #zitplan .bank { fill: var(--vel); stroke: var(--k); stroke-width: 2; }
@@ -110,7 +118,7 @@
   .budget li svg { width: 17px; height: 17px; }
   .budget li.vol { background: var(--k); border-color: var(--k); color: var(--vel); }
   .budget li.nu { border: 2px solid var(--k); color: var(--k); animation: adem 1.6s ease-in-out infinite; }
-  .budget li.gespaard { border-style: dashed; color: var(--stil); background: repeating-linear-gradient(-45deg, transparent 0 5px, var(--gezet) 5px 7px); }
+  .budget li.gespaard { border-style: dashed; color: var(--stil); background: var(--gezet); }
   @keyframes adem { 50% { opacity: .45; } }
   .budget-tekst { margin: 8px 0 0; color: var(--zacht); }
   .budget-tekst b { color: var(--inkt); }
@@ -153,6 +161,7 @@
   .al .wie small { display: block; font-weight: 500; color: var(--stil); font-size: .74rem; margin-top: 2px; }
   .al .nr { font: 600 .76rem/1 var(--sans); color: var(--stil); padding-top: 5px; font-variant-numeric: tabular-nums; }
   .al .tekst { max-width: 72ch; overflow-wrap: anywhere; }
+  p { text-wrap: pretty; }
   .al .tekst p { margin: 0 0 .55em; } .al .tekst p:last-child { margin: 0; }
   .al.focus { background: var(--griffie-zacht); box-shadow: inset 0 0 0 2px var(--griffie); }
 
@@ -318,6 +327,7 @@
   </div>
 
   <aside class="kaart" aria-label="Zittingskaart">
+    <section class="blok laatste-keuze" id="laatste-keuze" hidden><h2>Laatste keuze van de Koning</h2><div id="laatste-keuze-tekst"></div></section>
     <section class="blok"><h2>Zitplan van de Raad</h2><div id="zitplan"></div><p class="zit-uitleg">Rode lijnen: aan wie de Koning het woord gaf, dikker is vaker. Het getal is hoe vaak die Rol sprak. Een gevulde zetel spreekt nu.</p></section>
     <section class="blok"><h2>Beurtenbudget</h2><ol class="budget" id="budget"></ol><p class="budget-tekst" id="budget-tekst">10 beurten voor de Raadsleden</p></section>
     <section class="blok"><h2>Open vragen van de Koning</h2><div id="open-lijst"><span class="leeg">Nog geen open vragen</span></div></section>
@@ -377,7 +387,7 @@ function reset() {
 
 function onderaan() { return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160; }
 function liveBezig() { return S.trace && S.trace.status === "bezig"; }
-function volg() { if ((S.volg || PITCH) && liveBezig() && !focusId) window.scrollTo({ top: document.documentElement.scrollHeight }); toonNaarLive(); }
+function volg() { if ((S.volg || PITCH) && liveBezig() && !focusId) { window.scrollTo({ top: document.documentElement.scrollHeight }); requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight })); } toonNaarLive(); }
 function toonNaarLive() { $("naar-live").hidden = !(liveBezig() && !PITCH && !onderaan()); }
 
 /* ---------- één beurt uit de trace -> één alinea (alleen nieuwe worden toegevoegd) ---------- */
@@ -580,6 +590,13 @@ function tekenZij() {
     ? (a.raadslid < BUDGET ? `<b>${BUDGET - a.raadslid} beurten gespaard</b>: de Koning wist genoeg` : "Het volledige budget is gebruikt")
     : `<b>${a.raadslid} van ${BUDGET}</b> beurten gebruikt`;
 
+  // Laatste keuze van de Koning (in beamer-modus bovenaan de kaart)
+  const lk = a.openRoutes[a.openRoutes.length - 1];
+  $("laatste-keuze").hidden = !lk;
+  if (lk) $("laatste-keuze-tekst").innerHTML = lk.aan
+    ? `<p class="aan" style="--k:${kleur(lk.aan)}">${sigil(lk.aan)}Het woord is aan ${esc(lidw(lk.aan))}</p><p class="vraag">${inline(lk.vraag)}</p><p class="reden">Waarom: ${inline(lk.reden)}</p>`
+    : `<p class="aan" style="--k:var(--voorzitter)">${sigil("koning")}De Koning sloot het debat</p><p class="reden">Waarom: ${inline(lk.reden)}</p>`;
+
   tekenZitplan(t, a, spreekt);
 
   // Open vragen: huidige lijst, met wat nieuw is en wat net beantwoord werd
@@ -719,6 +736,8 @@ setInterval(() => {
 /* ---------- thema ---------- */
 (() => {
   let thema = null; try { thema = localStorage.getItem("thema"); } catch {}
+  const q = new URLSearchParams(location.search).get("thema");   // ?thema=dag of ?thema=nacht, handig voor een beamerlink
+  if (q === "dag" || q === "nacht") thema = q === "nacht" ? "dark" : "light";
   if (thema) document.documentElement.dataset.theme = thema;
   const zet = () => { const d = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
     $("thema").textContent = d ? "Dagzitting" : "Nachtzitting"; $("thema").title = d ? "Naar het lichte thema" : "Naar het donkere thema"; };
