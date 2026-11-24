@@ -486,7 +486,7 @@ def kennisbron_bestanden(rol):
     return sorted(p for p in map_.glob("*") if p.suffix in (".md", ".csv")) if map_.is_dir() else []
 
 
-def instructies(lid, bestanden, mcp):
+def instructies(lid, bestanden, mcp, python=False):
     pre = PREFIX[lid.ROL]
     tekst = (
         f"Je bent de {lid.NAAM}, een Raadslid in de Council of Achrona. {lid.PERSPECTIEF}\n"
@@ -500,7 +500,14 @@ def instructies(lid, bestanden, mcp):
         "- Verwijst je bron naar een andere Rol of naar iets wat een andere Rol moet weten? Zeg dat (de Koning beslist wie hij dan vraagt).\n"
         "- Zeg het eerlijk als je bron iets niet vermeldt. Hoogstens 150 woorden, geen inleiding."
     )
-    if mcp:
+    if mcp and python:
+        # Toolmodus python: het model roept zelf niets aan. Zonder deze zin zocht een OpenClaw-agent eigen tools,
+        # vond die niet en antwoordde "[geblokkeerd]" (bevinding proefruns 24/11).
+        tekst += ("\nJe roept zelf geen tools aan. Je vraagt een tool aan met een JSON-verzoek (het protocol staat in de vraag); "
+                  "de Council voert het uit op je eigen Kennisbron en geeft je het resultaat. Dat is de enige toolroute en ze werkt: "
+                  "zeg nooit dat een tool geblokkeerd of niet beschikbaar is. Zoek met zoek of zoek_betekenis, "
+                  "lees de records die je noemt na met toon.")
+    elif mcp:
         tekst += ("\nRaadpleeg je Kennisbron ALTIJD met je tools vóór je antwoordt: zoek of zoek_betekenis om records te vinden, "
                   "toon om de records die je noemt na te lezen, lees_kennisbron voor het overzicht.")
     elif bestanden:
@@ -600,6 +607,20 @@ async def model_stream(llm, berichten, bij_tekst=None):
     raise fout
 
 
+GEBLOKKEERD = re.compile(
+    r"\[geblokkeerd\]|toolblokkade|geen beschikbare[^.]{0,30}tool"
+    r"|(?:tool|kennisbron|bron)[^.]{0,60}niet (?:beschikbaar|bereikbaar|raadplegen|bereiken|aanroepen)", re.I)
+
+
+def geblokkeerd(tekst, rol):
+    """Een eindantwoord dat een toolblokkade meldt en geen enkel eigen record-ID noemt. Een eerlijk antwoord dat zegt
+    dat de bron iets niet vermeldt, of dat eigen ID's noemt, telt niet als geblokkeerd."""
+    if not GEBLOKKEERD.search(tekst or ""):
+        return False
+    pre = PREFIX.get(rol)
+    return not (pre and any(i.startswith(pre + "-") for i in ids_in(tekst)))
+
+
 async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4, rol=None, bij_tool=None):
     """Eén Raadslid-beurt met toolloop in Python. Geeft (tekst, [(tool, argumenten)], gezien_ids) terug.
     bij_tool(tool, argumenten) wordt meteen na elke toolcall opgeroepen (zodat de trace live meegroeit)."""
@@ -611,6 +632,19 @@ async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4, rol=No
                  {"role": "user", "content": prompt + toolprotocol(tools, max_calls) + "\n\n" + eerst_lezen}]
     calls, gezien = [], set()
     bron_gelezen = False
+    blokkades = 0
+    voorbeeld = "toon" if "toon" in namen else next(iter(sorted(namen)), "zoek")
+
+    def blokkade():
+        """Het Raadslid meldt een toolblokkade: opnieuw laten zoeken, of een mislukte beurt als het blijft duren."""
+        nonlocal blokkades
+        blokkades += 1
+        if len(calls) >= max_calls or blokkades > 2:
+            raise RuntimeError("Raadslid-beurt afgebroken: het Raadslid meldde een toolblokkade, maar de tools werken "
+                               "via JSON (geen bijdrage, geen bewijs).")
+        berichten.append({"role": "user", "content": (
+            "Je tools zijn niet geblokkeerd: je vraagt ze aan met JSON en de Council voert ze uit. Vraag nu een tool aan, "
+            f'bv. {{"tool": "{voorbeeld}", "argumenten": {{...}}}}, en antwoord pas daarna met {{"antwoord": "..."}}.')})
 
     def toon(t):  # live.json: het antwoord dat het Raadslid aan het schrijven is
         antwoord = veld_deel(t, "antwoord")
@@ -621,7 +655,7 @@ async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4, rol=No
         elif bron_gelezen and not t.lstrip().startswith("{"):
             live(spreker=rol, soort="bericht", stap="schrijft", tekst=t)
 
-    for _ in range(max_calls + 3):
+    for _ in range(max_calls + 6):
         tekst = (await model_stream(llm, berichten, toon)).strip()
         data = parse_json(tekst) or {}
         berichten.append({"role": "assistant", "content": tekst})
@@ -653,11 +687,17 @@ async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4, rol=No
             continue
         antwoord = data.get("antwoord")
         if isinstance(antwoord, str) and antwoord.strip():
+            if geblokkeerd(antwoord, rol):
+                blokkade()
+                continue
             return antwoord.strip(), calls, gezien
         if tool and len(calls) >= max_calls:
             berichten.append({"role": "user", "content": 'Geen toolcalls meer. Geef nu je antwoord als {"antwoord": "..."}.'})
             continue
         if tekst and not tekst.lstrip().startswith("{"):
+            if geblokkeerd(tekst, rol):
+                blokkade()
+                continue
             return tekst, calls, gezien  # gewoon tekst na minstens één geslaagde toolcall: aanvaarden als antwoord
         berichten.append({"role": "user", "content": 'Onleesbaar. Antwoord met {"tool": ...} of {"antwoord": "..."}.'})
     if not bron_gelezen:
@@ -748,7 +788,7 @@ async def run():
                 if rol in sessies:  # toolmodus python
                     sessie, mcp_tools = sessies[rol]
                     tekst, calls, gezien = await spreek_python(
-                        llm, instructies(lid, [], mcp_url), prompt, sessie, mcp_tools, rol=rol,
+                        llm, instructies(lid, [], mcp_url, python=True), prompt, sessie, mcp_tools, rol=rol,
                         bij_tool=lambda tool, args: beurt(ronde, rol, "toolcall", tool=tool, argumenten=args, pad=mcp_url))
                     STAAT["gezien"].setdefault(rol, set()).update(gezien)
                     beurt(ronde, rol, "bericht", tekst=tekst)
