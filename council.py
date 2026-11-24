@@ -13,6 +13,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 import uuid
 from contextlib import AsyncExitStack
 from datetime import datetime
@@ -39,7 +41,75 @@ SLOTS = ("ingreep", "mechanisme", "verloop")
 ID_RE = re.compile(r"\b(ARC|ENG|GUA|HIS|ORA|BEA)[-‐‑‒–—―−]([0-9]{3})\b")
 
 # Gedeelde staat tussen de async debat-loop en de (sync) Koning.
-STAAT = {"verbruik": None, "gezien": {}, "open_vragen": []}
+STAAT = {"verbruik": None, "gezien": {}, "open_vragen": [], "live": None, "stream": {}}
+
+
+def schrijf_atomisch(pad, tekst):
+    """Schrijf via een tijdelijk bestand + rename: de viewer leest nooit een half bestand."""
+    tmp = pad.with_name(pad.name + ".tmp")
+    tmp.write_text(tekst, encoding="utf-8")
+    for poging in range(20):
+        try:
+            return os.replace(tmp, pad)
+        except PermissionError:  # Windows: de viewer leest het bestand net; even wachten
+            time.sleep(0.02)
+    os.replace(tmp, pad)
+
+
+class Live:
+    """live.json: wat er NU gebeurt (tekst die het model aan het schrijven is). Staat los van trace.json,
+    zodat de trace de ongewijzigde eindoutput blijft. De viewer toont het als groeiend item onderaan."""
+
+    def __init__(self, pad, run_id):
+        self.pad, self.run_id, self.laatst, self.lock = pad, run_id, 0.0, threading.Lock()
+
+    def zet(self, forceer=False, **staat):
+        with self.lock:
+            nu = time.monotonic()
+            if not forceer and nu - self.laatst < 0.08:
+                return  # hoogstens ~12 updates per seconde
+            self.laatst = nu
+            try:
+                schrijf_atomisch(self.pad, json.dumps({"run_id": self.run_id, **staat}, ensure_ascii=False))
+            except OSError:
+                pass  # live is een extraatje: nooit de run laten falen
+
+    def leeg(self):
+        self.zet(forceer=True, spreker=None)
+
+
+def live(**staat):
+    if STAAT["live"]:
+        STAAT["live"].zet(**staat)
+
+
+def veld_deel(tekst, veld):
+    """Waarde van een string-veld uit (mogelijk onvolledige) JSON die nog binnenstroomt, of None."""
+    m = re.search(r'"%s"\s*:\s*"' % re.escape(veld), tekst)
+    if not m:
+        return None
+    i, ruw = m.end(), []
+    while i < len(tekst):
+        c = tekst[i]
+        if c == "\\":
+            if i + 1 >= len(tekst):
+                break
+            ruw.append(tekst[i:i + 2])
+            i += 2
+            continue
+        if c == '"':
+            break
+        ruw.append(c)
+        i += 1
+    s = "".join(ruw)
+    try:
+        return json.loads('"' + s + '"')
+    except ValueError:  # onvolledige \u-escape aan het einde
+        return s.replace("\\n", "\n").replace('\\"', '"')
+
+
+# Streamen waar het endpoint het kan; anders terugvallen. De eerste variant die werkt, wordt onthouden.
+STREAM_VARIANTEN = ({"stream": True, "stream_options": {"include_usage": True}}, {"stream": True}, {})
 
 
 def ids_in(tekst):
@@ -55,8 +125,9 @@ def normaliseer(tekst):
 _koning_client = None
 
 
-def koning_json(systeem, gebruiker, max_tokens=2000):
-    """Synchrone chat-call naar MODEL_GROOT die een JSON-object teruggeeft (of None)."""
+def koning_json(systeem, gebruiker, max_tokens=2000, bij_tekst=None):
+    """Synchrone chat-call naar MODEL_GROOT die een JSON-object teruggeeft (of None).
+    bij_tekst(tekst_tot_nu) wordt opgeroepen terwijl het antwoord binnenstroomt (voor live.json)."""
     global _koning_client
     if _koning_client is None:
         _koning_client = OpenAI(base_url=os.environ["OPENAI_BASE_URL"], api_key=os.environ["OPENAI_API_KEY"], max_retries=8)
@@ -64,21 +135,49 @@ def koning_json(systeem, gebruiker, max_tokens=2000):
           "messages": [{"role": "system", "content": systeem}, {"role": "user", "content": gebruiker}]}
     if os.getenv("REASONING"):
         kw["reasoning_effort"] = os.environ["REASONING"]
-    for poging in range(3):
-        try:
-            if poging == 0:
-                r = _koning_client.chat.completions.create(response_format={"type": "json_object"}, **kw)
-            else:  # niet elk model kent JSON mode: dan zonder, en robuust parsen
-                r = _koning_client.chat.completions.create(**kw)
-        except Exception as e:
-            print(f"[Koning] LLM-fout (poging {poging + 1}): {e}")
+    # Pogingen: JSON mode aan/uit (niet elk model kent het) x streamen/niet (niet elk endpoint kan het).
+    pogingen = [(j, s) for j in (True, False) for s in range(len(STREAM_VARIANTEN))]
+    if "sync" in STAAT["stream"]:
+        pogingen = [(j, STAAT["stream"]["sync"]) for j in (True, False)] + pogingen
+    gezien, onleesbaar = set(), 0
+    for json_mode, s in pogingen:
+        if (json_mode, s) in gezien:
             continue
-        tel_usage("groot", r.usage)
-        data = parse_json((r.choices[0].message.content or "") if r.choices else "")
+        gezien.add((json_mode, s))
+        extra = dict(STREAM_VARIANTEN[s], **({"response_format": {"type": "json_object"}} if json_mode else {}))
+        try:
+            tekst = _koning_call(dict(kw, **extra), bij_tekst)
+        except Exception as e:
+            print(f"[Koning] LLM-fout ({'json' if json_mode else 'tekst'}, stream {s}): {str(e)[:200]}")
+            continue
+        STAAT["stream"].setdefault("sync", s)
+        data = parse_json(tekst)
         if isinstance(data, dict):
             return data
-        print(f"[Koning] onleesbare JSON (poging {poging + 1})")
+        onleesbaar += 1
+        print(f"[Koning] onleesbare JSON ({onleesbaar})")
+        if onleesbaar >= 2:
+            break
     return None
+
+
+def _koning_call(kw, bij_tekst):
+    r = _koning_client.chat.completions.create(**kw)
+    if not kw.get("stream"):
+        tel_usage("groot", r.usage)
+        tekst = (r.choices[0].message.content or "") if r.choices else ""
+        if bij_tekst:
+            bij_tekst(tekst)
+        return tekst
+    delen = []
+    for chunk in r:
+        if getattr(chunk, "usage", None):
+            tel_usage("groot", chunk.usage)
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+            delen.append(chunk.choices[0].delta.content)
+            if bij_tekst:
+                bij_tekst("".join(delen))
+    return "".join(delen)
 
 
 def tel_usage(naam, usage):
@@ -166,7 +265,9 @@ def kies_volgende(beurten, leden):
         + ("" if gesproken >= MIN_BEURTEN_VOOR_STOP else f" Stoppen kan pas na {MIN_BEURTEN_VOOR_STOP} beurten.")
         + "\n\nWie spreekt nu, met welke vraag, en waarom? Of stop je?"
     )
-    keuze = koning_json(KONING_ROUTERING, gebruiker, max_tokens=1200) or {}
+    live(forceer=True, spreker="koning", soort="routering")
+    keuze = koning_json(KONING_ROUTERING, gebruiker, max_tokens=1200, bij_tekst=lambda t: live(
+        spreker="koning", soort="routering", aan=veld_deel(t, "rol"), vraag=veld_deel(t, "vraag"), reden=veld_deel(t, "reden"))) or {}
     rol, vraag = keuze.get("rol"), keuze.get("vraag")
     reden = str(keuze.get("reden") or "").strip()
     open_vragen = [str(v) for v in keuze.get("open_vragen") or [] if str(v).strip()][:8]
@@ -260,7 +361,9 @@ def schrijf_verdict(run_id, beurten, leden):
         f"Record-ID's die Raadsleden uit hun eigen Kennisbron aanhaalden (alleen deze mogen als bewijs): "
         f"{', '.join(sorted(toegelaten)) or '(geen)'}\n\nStel het Council Verdict op."
     )
-    v = koning_json(KONING_VERDICT, gebruiker, max_tokens=4000) or {}
+    live(forceer=True, spreker="koning", soort="verdict")
+    v = koning_json(KONING_VERDICT, gebruiker, max_tokens=4000, bij_tekst=lambda t: live(
+        spreker="koning", soort="verdict", tekst=veld_deel(t, "samenvatting"))) or {}
     weg = set()
 
     oorzaak = {}
@@ -445,16 +548,56 @@ def toolprotocol(tools, max_calls):
     return TOOLPROTOCOL.replace("MAX", str(max_calls)).replace("TOOLS", lijst)
 
 
-async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4):
-    """Eén Raadslid-beurt met toolloop in Python. Geeft (tekst, [(tool, argumenten)], gezien_ids) terug."""
+async def model_stream(llm, berichten, bij_tekst=None):
+    """Async chat-call naar MODEL_KLEIN; streamt als het endpoint dat kan (voor live tekst)."""
+    volgorde = list(range(len(STREAM_VARIANTEN)))
+    if "async" in STAAT["stream"]:
+        volgorde.insert(0, STAAT["stream"]["async"])
+    fout = None
+    for s in dict.fromkeys(volgorde):
+        extra = STREAM_VARIANTEN[s]
+        try:
+            r = await llm.chat.completions.create(model=os.environ["MODEL_KLEIN"], messages=berichten, **extra)
+            if not extra.get("stream"):
+                tel_usage("klein", r.usage)
+                tekst = (r.choices[0].message.content or "") if r.choices else ""
+            else:
+                delen = []
+                async for chunk in r:
+                    if getattr(chunk, "usage", None):
+                        tel_usage("klein", chunk.usage)
+                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                        delen.append(chunk.choices[0].delta.content)
+                        if bij_tekst:
+                            bij_tekst("".join(delen))
+                tekst = "".join(delen)
+            STAAT["stream"].setdefault("async", s)
+            return tekst
+        except Exception as e:
+            fout = e
+            print(f"[Raadslid] LLM-fout (stream {s}): {str(e)[:200]}")
+    raise fout
+
+
+async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4, rol=None, bij_tool=None):
+    """Eén Raadslid-beurt met toolloop in Python. Geeft (tekst, [(tool, argumenten)], gezien_ids) terug.
+    bij_tool(tool, argumenten) wordt meteen na elke toolcall opgeroepen (zodat de trace live meegroeit)."""
     namen = {t.name for t in tools}
     berichten = [{"role": "system", "content": systeem + toolprotocol(tools, max_calls)},
                  {"role": "user", "content": prompt}]
     calls, gezien, tekst = [], set(), ""
+
+    def toon(t):  # live.json: het antwoord dat het Raadslid aan het schrijven is
+        antwoord = veld_deel(t, "antwoord")
+        if antwoord is not None:
+            live(spreker=rol, soort="bericht", stap="schrijft", tekst=antwoord)
+        elif '"tool"' in t:
+            live(spreker=rol, soort="bericht", stap="zoekt")
+        elif calls and not t.lstrip().startswith("{"):
+            live(spreker=rol, soort="bericht", stap="schrijft", tekst=t)
+
     for _ in range(max_calls + 3):
-        r = await llm.chat.completions.create(model=os.environ["MODEL_KLEIN"], messages=berichten)
-        tel_usage("klein", r.usage)
-        tekst = ((r.choices[0].message.content or "") if r.choices else "").strip()
+        tekst = (await model_stream(llm, berichten, toon)).strip()
         data = parse_json(tekst) or {}
         berichten.append({"role": "assistant", "content": tekst})
         tool = data.get("tool")
@@ -467,6 +610,9 @@ async def spreek_python(llm, systeem, prompt, sessie, tools, max_calls=4):
                 uit = f"Toolfout: {e}"
             calls.append((tool, args))
             gezien.update(ids_in(uit))
+            live(forceer=True, spreker=rol, soort="bericht", stap="bron", tool=tool)
+            if bij_tool:
+                bij_tool(tool, args)
             berichten.append({"role": "user", "content": f"Resultaat van {tool}:\n{uit[:15000]}\n\nVolgende stap (alleen JSON)."})
             continue
         if not calls:
@@ -495,12 +641,12 @@ async def run():
     leden = raadsleden.alle()
     controleer(leden)
     beurten, verbruik = [], {}
-    STAAT.update(verbruik=verbruik, gezien={}, open_vragen=[])
+    STAAT.update(verbruik=verbruik, gezien={}, open_vragen=[], live=Live(out / "live.json", run_id))
     trace = {"run_id": run_id, "status": "bezig", "raadsleden": [l.ROL for l in leden], "beurten": beurten, "geschillen": [], "verbruik": verbruik,
              "modellen": {"raadsleden": os.environ["MODEL_KLEIN"], "koning": os.environ["MODEL_GROOT"], "toolmodus": toolmodus}}
 
     def bewaar(naam, data):
-        (out / naam).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        schrijf_atomisch(out / naam, json.dumps(data, indent=2, ensure_ascii=False))
 
     def beurt(ronde, spreker, soort, **velden):
         beurten.append({"nr": len(beurten) + 1, "ronde": ronde, "spreker": spreker, "soort": soort, **velden})
@@ -558,11 +704,12 @@ async def run():
                       + f"\n\nVraag van de Koning aan jou: {vraag}")
             trace["aan_het_woord"] = rol
             bewaar("trace.json", trace)
+            live(forceer=True, spreker=rol, soort="bericht", stap="denkt")
             if rol in sessies:  # toolmodus python
                 sessie, mcp_tools = sessies[rol]
-                tekst, calls, gezien = await spreek_python(llm, instructies(lid, [], mcp_url), prompt, sessie, mcp_tools)
-                for tool, args in calls:
-                    beurt(ronde, rol, "toolcall", tool=tool, argumenten=args, pad=mcp_url)
+                tekst, calls, gezien = await spreek_python(
+                    llm, instructies(lid, [], mcp_url), prompt, sessie, mcp_tools, rol=rol,
+                    bij_tool=lambda tool, args: beurt(ronde, rol, "toolcall", tool=tool, argumenten=args, pad=mcp_url))
                 STAAT["gezien"].setdefault(rol, set()).update(gezien)
                 beurt(ronde, rol, "bericht", tekst=tekst)
                 print(f"\n[ronde {ronde}] {lid.NAAM}:\n{tekst}")
@@ -597,6 +744,7 @@ async def run():
     print(f"\n[Koning]:\n{besluit}")
 
     trace["status"], trace["aan_het_woord"] = "klaar", None
+    STAAT["live"].leeg()
     bewaar("trace.json", trace)
     bewaar("verdict.json", verdict)
 
